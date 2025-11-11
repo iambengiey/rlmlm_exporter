@@ -54,7 +54,31 @@ const (
 var (
 	factories      = make(map[string]func(*config.Config, log.Logger) (Collector, error))
 	collectorState = make(map[string]*bool)
+	defaultConfig  *config.Config
+	defaultLogger  log.Logger = log.NewNopLogger()
 )
+
+// SetConfig allows the main package to provide the parsed configuration so that
+// helper constructors (like the legacy NewFlexlmCollector) can continue to
+// operate without requiring callers to thread the value through manually.
+func SetConfig(cfg *config.Config) {
+	defaultConfig = cfg
+}
+
+// SetLogger stores a reusable logger for helper constructors and collectors
+// that rely on a shared instance.
+func SetLogger(logger log.Logger) {
+	if logger != nil {
+		defaultLogger = logger
+	}
+}
+
+// NewFlexlmCollector keeps backwards compatibility with historical callers
+// that only provided a list of collector filters. It relies on the
+// configuration and logger set via SetConfig/SetLogger.
+func NewFlexlmCollector(filters ...string) (*RlmlmCollector, error) {
+	return NewRlmlmCollector(defaultConfig, defaultLogger, filters...)
+}
 
 // Collector is the interface a collector has to implement.
 type Collector interface {
@@ -90,7 +114,17 @@ type RlmlmCollector struct {
 // NewRlmlmCollector creates a new RlmlmCollector, replacing the old NewFlexlmCollector.
 func NewRlmlmCollector(cfg *config.Config, logger log.Logger, filters ...string) (*RlmlmCollector, error) {
 	if logger == nil {
+		logger = defaultLogger
+	}
+	if logger == nil {
 		logger = log.NewNopLogger()
+	}
+
+	if cfg == nil {
+		cfg = defaultConfig
+	}
+	if cfg == nil {
+		return nil, fmt.Errorf("no configuration loaded")
 	}
 
 	f := make(map[string]bool)
