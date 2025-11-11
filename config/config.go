@@ -43,6 +43,10 @@ type Config struct {
 	Licenses []License `yaml:"licenses"`
 }
 
+// Configuration is kept for backwards-compatibility with older code paths that
+// still reference the historical name.
+type Configuration = Config
+
 // Load parses the YAML file at path and returns a Config.
 func Load(path string) (*Config, error) {
 	if path == "" {
