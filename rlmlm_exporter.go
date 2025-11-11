@@ -30,15 +30,14 @@ import (
 	"github.com/iambengiey/rlmlm_exporter/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	promslog "github.com/prometheus/common/promslog"
-	promslogflag "github.com/prometheus/common/promslog/flag"
+	"github.com/prometheus/common/promlog"
+	promlogflag "github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/common/version"
 )
 
 var (
 	appConfig  *config.Config
 	baseLogger gokitlog.Logger = gokitlog.NewNopLogger()
-	logConfig  promslog.Config
 )
 
 func init() {
@@ -82,14 +81,13 @@ func main() {
 		configPath    = kingpin.Flag("path.config", "Configuration YAML file path.").Default("licenses.yml").String()
 	)
 
-	promslogflag.AddFlags(kingpin.CommandLine, &logConfig)
+	promlogConfig := promlog.Config{}
+	promlogflag.AddFlags(kingpin.CommandLine, &promlogConfig)
 	kingpin.Version(version.Print("rlmlm_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	logger := promslog.New(&logConfig)
-	logger = gokitlog.With(logger, "ts", gokitlog.DefaultTimestampUTC(), "caller", gokitlog.DefaultCaller)
-	baseLogger = logger
+	baseLogger = promlog.New(promlogConfig)
 	collector.SetLogger(baseLogger)
 	config.SetLogger(baseLogger)
 
