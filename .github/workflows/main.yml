@@ -1,32 +1,95 @@
-name: Build RLM Exporter
+name: Build RLM Exporter (Linux/Windows)
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
+    tags: [ 'v*' ]     # e.g. v1.0.0
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
+
+permissions:
+  contents: write   # needed for release on tags
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     strategy:
+      fail-fast: false
       matrix:
-        goos: [linux, windows]
-        goarch: [amd64]
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22
+          go-version: '1.22'
+          cache: true
+
+      - name: Verify module
+        run: |
+          test -f go.mod || (echo "go.mod not found at repo root" && exit 1)
+          echo "Module: $(grep '^module ' go.mod | awk '{print $2}')"
+          go mod download
+          go mod tidy
 
       - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
         run: |
           mkdir -p dist/${{ matrix.goos }}/${{ matrix.goarch }}
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-          go build -v -trimpath -ldflags="-s -w" \
-            -o dist/${{ matrix.goos }}/${{ matrix.goarch }}/rlmlm_exporter ./cmd/rlmlm_exporter
+            go build -v -trimpath -ldflags="-s -w" \
+              -o dist/${{ matrix.goos }}/${{ matrix.goarch }}/rlmlm_exporter${{ matrix.ext }} \
+              ./cmd/rlmlm_exporter
+
+      - name: Package artefact (${{ matrix.goos }}-${{ matrix.goarch }})
+        run: |
+          cd dist/${{ matrix.goos }}/${{ matrix.goarch }}
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip -9 ../rlmlm_exporter_${{ matrix.goos }}_${{ matrix.goarch }}.zip rlmlm_exporter${{ matrix.ext }}
+          else
+            tar -czf ../rlmlm_exporter_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz rlmlm_exporter${{ matrix.ext }}
+          fi
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum rlmlm_exporter_* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload CI artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rlmlm_exporter_${{ github.sha }}
+          path: |
+            dist/rlmlm_exporter_*.tar.gz
+            dist/rlmlm_exporter_*.zip
+            dist/SHA256SUMS.txt
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: rlmlm_exporter_${{ github.sha }}
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/rlmlm_exporter_*.tar.gz
+            dist/rlmlm_exporter_*.zip
+            dist/SHA256SUMS.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
