@@ -53,9 +53,9 @@ func (c *LmstatFeatureExpCollector) Update(ch chan<- prometheus.Metric) error {
 	return nil
 }
 
-// lmstatFeatureExpUpdate executes the lmstat command to get expiration information.
+// lmstatFeatureExpUpdate executes the rlmstat command to get expiration information.
 func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) {
-	level.Debug(c.logger).Log("msg", "Running lmstat for feature expiration", "name", license.Name)
+	level.Debug(c.logger).Log("msg", "Running rlmstat for feature expiration", "name", license.Name)
 
 	var (
 		server string
@@ -77,12 +77,12 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 		return
 	}
 
-	cmd := exec.Command("lmstat", args...)
+	cmd := exec.Command("rlmstat", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		// FIX: Replaced undefined log.Errorf with go-kit/log
 		level.Error(c.logger).Log(
-			"msg", "Failed to create stdout pipe for lmstat exp",
+			"msg", "Failed to create stdout pipe for rlmstat exp",
 			"license", license.Name,
 			"err", err,
 		)
@@ -92,9 +92,9 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 	if err := cmd.Start(); err != nil {
 		// FIX: Replaced undefined log.Errorf with go-kit/log
 		level.Error(c.logger).Log(
-			"msg", "Failed to start lmstat exp command",
+			"msg", "Failed to start rlmstat exp command",
 			"license", license.Name,
-			"cmd", "lmstat "+strings.Join(args, " "),
+			"cmd", "rlmstat "+strings.Join(args, " "),
 			"err", err,
 		)
 		return
@@ -103,7 +103,7 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 	lmstatOutput, err := io.ReadAll(stdout)
 	if err != nil {
 		// FIX: Replaced undefined log.Errorln with go-kit/log
-		level.Error(c.logger).Log("msg", "Failed to read lmstat exp output", "license", license.Name, "err", err)
+		level.Error(c.logger).Log("msg", "Failed to read rlmstat exp output", "license", license.Name, "err", err)
 		cmd.Wait()
 		return
 	}
@@ -115,7 +115,7 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 		// FIX: Replaced undefined log.Fatalf/Fatalln with level.Error and return
 		if strings.Contains(string(lmstatOutput), "License server status: Error") {
 			level.Error(c.logger).Log(
-				"msg", "License server error during expiration check (lmstat -i)",
+				"msg", "License server error during expiration check (rlmstat -i)",
 				"license", license.Name,
 				"err", err,
 			)
@@ -123,7 +123,7 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 		}
 
 		level.Error(c.logger).Log(
-			"msg", "lmstat exp command failed with error",
+			"msg", "rlmstat exp command failed with error",
 			"license", license.Name,
 			"err", err,
 		)
