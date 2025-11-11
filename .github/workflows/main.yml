@@ -20,7 +20,6 @@ var (
 	listenAddress = kingpin.Flag("web.listen-address", "Address to listen on for HTTP requests.").Default(":9240").String()
 	metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 	configFile    = kingpin.Flag("config.file", "Exporter configuration file path.").Default("rlmlm.yml").String()
-	logLevel      = kingpin.Flag("log.level", "Only log messages with the given severity or above. Options: debug, info, warn, error").Default("info").String()
 )
 
 func main() {
