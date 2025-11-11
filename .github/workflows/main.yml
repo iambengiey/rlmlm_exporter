@@ -1,14 +1,18 @@
-name: Build RLM Exporter (Linux/Windows)
+name: Build RLM Exporter (auto-detect module)
 
 on:
   push:
     branches: [ main, master ]
-    tags: [ 'v*' ]     # e.g. v1.0.0
+    tags: [ 'v*' ]
   pull_request:
     branches: [ main, master ]
 
 permissions:
-  contents: write   # needed for release on tags
+  contents: write
+
+env:
+  # Entry package relative to the module directory (adjust if needed)
+  ENTRY_PKG: ./cmd/rlmlm_exporter
 
 jobs:
   build:
@@ -28,28 +32,65 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Locate Go module
+        id: locate
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Searching for go.mod files…"
+          mapfile -t MODS < <(find . -type f -name go.mod | sort)
+          if [ ${#MODS[@]} -eq 0 ]; then
+            echo "No go.mod found. Initialise one locally and push (go mod init …)."
+            exit 1
+          fi
+
+          echo "Found:"
+          printf ' - %s\n' "${MODS[@]}"
+
+          # Prefer module matching repo path if present
+          REPO_PATH="github.com/iambengiey/rlmlm_exporter"
+          PICK=""
+          for m in "${MODS[@]}"; do
+            if grep -qE "^module[[:space:]]+${REPO_PATH}$" "$m"; then
+              PICK="$m"
+              break
+            fi
+          done
+          # Fallback to first go.mod
+          if [ -z "$PICK" ]; then
+            PICK="${MODS[0]}"
+          fi
+
+          MOD_DIR="$(cd "$(dirname "$PICK")" && pwd)"
+          echo "Using module at: $MOD_DIR"
+          echo "dir=$MOD_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: true
 
-      - name: Verify module
+      - name: Verify & tidy
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: |
-          test -f go.mod || (echo "go.mod not found at repo root" && exit 1)
           echo "Module: $(grep '^module ' go.mod | awk '{print $2}')"
+          go env GOMOD
           go mod download
           go mod tidy
+          go list ./... >/dev/null
 
       - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: |
           mkdir -p dist/${{ matrix.goos }}/${{ matrix.goarch }}
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
             go build -v -trimpath -ldflags="-s -w" \
               -o dist/${{ matrix.goos }}/${{ matrix.goarch }}/rlmlm_exporter${{ matrix.ext }} \
-              ./cmd/rlmlm_exporter
+              ${{ env.ENTRY_PKG }}
 
       - name: Package artefact (${{ matrix.goos }}-${{ matrix.goarch }})
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: |
           cd dist/${{ matrix.goos }}/${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
@@ -59,6 +100,7 @@ jobs:
           fi
 
       - name: Checksums
+        working-directory: ${{ steps.locate.outputs.dir }}
         run: |
           cd dist
           sha256sum rlmlm_exporter_* > SHA256SUMS.txt
@@ -69,9 +111,9 @@ jobs:
         with:
           name: rlmlm_exporter_${{ github.sha }}
           path: |
-            dist/rlmlm_exporter_*.tar.gz
-            dist/rlmlm_exporter_*.zip
-            dist/SHA256SUMS.txt
+            ${{ steps.locate.outputs.dir }}/dist/rlmlm_exporter_*.tar.gz
+            ${{ steps.locate.outputs.dir }}/dist/rlmlm_exporter_*.zip
+            ${{ steps.locate.outputs.dir }}/dist/SHA256SUMS.txt
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
