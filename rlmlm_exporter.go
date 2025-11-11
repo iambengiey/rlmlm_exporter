@@ -1,3 +1,4 @@
+// Copyright 2025 Greg Drake
 // Copyright 2017 Mario Trangoni
 // Copyright 2015 The Prometheus Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
