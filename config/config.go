@@ -35,6 +35,7 @@ type License struct {
 	FeaturesToInclude   string `yaml:"features_to_include,omitempty"`
 	MonitorUsers        bool   `yaml:"monitor_users"`
 	MonitorReservations bool   `yaml:"monitor_reservations"`
+	MonitorComputers    bool   `yaml:"monitor_computers"`
 }
 
 // Configuration for all licences.
