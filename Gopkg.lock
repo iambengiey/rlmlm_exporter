@@ -119,7 +119,7 @@
 
 [[projects]]
   digest = "1:c06d9e11d955af78ac3bbb26bd02e01d2f61f689e1a3bce2ef6fb683ef8a7f2d"
-  name = "ithub.com/alecthomas/kingpin/v2"
+  name = "github.com/alecthomas/kingpin/v2"
   packages = ["."]
   pruneopts = "UT"
   revision = "947dcec5ba9c011838740e680966fd7087a71d0d"

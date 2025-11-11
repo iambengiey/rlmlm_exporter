@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/alecthomas/kingpin/v2"
 	"github.com/prometheus/client_golang/prometheus"
-	"ithub.com/alecthomas/kingpin/v2"
 )
 
 // Namespace defines the common namespace to be used by all metrics.
