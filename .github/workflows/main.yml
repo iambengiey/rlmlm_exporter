@@ -34,11 +34,15 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      # --- FIX: Initialize Go module if go.mod is not present ---
       - name: Initialize Go Module
-        # We assume the user's Go entry point (main.go) is in the root directory.
         # This step creates the essential go.mod file needed for 'go mod tidy'.
         run: go mod init ${{ github.repository }}
+
+      - name: Fix Kingpin Dependency Path
+        # The project imports gopkg.in/alecthomas/kingpin.v2, but the module is defined as 
+        # github.com/alecthomas/kingpin/v2. This 'replace' directive resolves the conflict.
+        run: |
+          echo "replace gopkg.in/alecthomas/kingpin.v2 => github.com/alecthomas/kingpin/v2 v2.4.0" >> go.mod
 
       - name: Go Module Tidy and Download Dependencies
         # This step resolves and fetches dependencies based on the main.go file.
