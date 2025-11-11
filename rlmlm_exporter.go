@@ -16,17 +16,25 @@ package main
 
 import (
 	"fmt"
+	stdlog "log"
 	"net/http"
 	_ "net/http/pprof"
+	"os"
+	"strings"
 
+	"github.com/alecthomas/kingpin/v2"
+	gokitlog "github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/iambengiey/rlmlm_exporter/collector"
 	"github.com/iambengiey/rlmlm_exporter/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/go-kit/log/level"
-	"github.com/go-kit/log"
 	"github.com/prometheus/common/version"
-	"github.com/alecthomas/kingpin/v2"
+)
+
+var (
+	appConfig  *config.Config
+	baseLogger gokitlog.Logger = gokitlog.NewNopLogger()
 )
 
 func init() {
@@ -34,42 +42,32 @@ func init() {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	var num int
 	filters := r.URL.Query()["collect[]"]
-	log.Debugln("collect query:", filters)
+	level.Debug(baseLogger).Log("msg", "collect query", "filters", strings.Join(filters, ","))
 
 	nc, err := collector.NewFlexlmCollector(filters...)
 	if err != nil {
-		log.Warnln("Couldn't create", err)
-		w.WriteHeader(http.StatusBadRequest)
-		num, err = w.Write([]byte(fmt.Sprintf("Couldn't create %s", err)))
-		if err != nil {
-			log.Fatal(num, err)
-		}
+		level.Warn(baseLogger).Log("msg", "failed to create filtered collector", "filters", strings.Join(filters, ","), "err", err)
+		http.Error(w, fmt.Sprintf("Couldn't create collector: %s", err), http.StatusBadRequest)
 		return
 	}
 
 	registry := prometheus.NewRegistry()
-	err = registry.Register(nc)
-	if err != nil {
-		log.Errorln("Couldn't register collector:", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		num, err = w.Write([]byte(fmt.Sprintf("Couldn't register collector: %s", err)))
-		if err != nil {
-			log.Fatal(num, err)
-		}
+	if err := registry.Register(nc); err != nil {
+		level.Error(baseLogger).Log("msg", "failed to register collector", "err", err)
+		http.Error(w, fmt.Sprintf("Couldn't register collector: %s", err), http.StatusInternalServerError)
+		return
 	}
 
 	gatherers := prometheus.Gatherers{
 		prometheus.DefaultGatherer,
 		registry,
 	}
-	// Delegate http serving to Prometheus client library, which will call collector.Collect.
-	h := promhttp.HandlerFor(gatherers,
-		promhttp.HandlerOpts{
-			ErrorLog:      log.NewErrorLogger(),
-			ErrorHandling: promhttp.ContinueOnError,
-		})
+
+	h := promhttp.HandlerFor(gatherers, promhttp.HandlerOpts{
+		ErrorLog:      stdlog.New(os.Stderr, "promhttp: ", stdlog.LstdFlags),
+		ErrorHandling: promhttp.ContinueOnError,
+	})
 	h.ServeHTTP(w, r)
 }
 
@@ -78,51 +76,77 @@ func main() {
 		listenAddress = kingpin.Flag("web.listen-address", "Address on which to expose metrics and web interface.").Default(":9319").String()
 		metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		configPath    = kingpin.Flag("path.config", "Configuration YAML file path.").Default("licenses.yml").String()
-		num           int
-		err           error
+		logFormat     = kingpin.Flag("log.format", "Log format to use (logfmt or json).").Default("logfmt").Enum("logfmt", "json")
+		logLevel      = kingpin.Flag("log.level", "Log level to use (debug, info, warn, error).").Default("info").Enum("debug", "info", "warn", "error")
 	)
 
-	log.AddFlags(kingpin.CommandLine)
 	kingpin.Version(version.Print("rlmlm_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	log.Infoln("Starting rlmlm_exporter", version.Info())
-	log.Infoln("Build context", version.BuildContext())
+	var logger gokitlog.Logger
+	switch *logFormat {
+	case "json":
+		logger = gokitlog.NewJSONLogger(os.Stderr)
+	default:
+		logger = gokitlog.NewLogfmtLogger(os.Stderr)
+	}
+	logger = gokitlog.NewSyncLogger(logger)
+	logger = gokitlog.With(logger, "ts", gokitlog.DefaultTimestampUTC(), "caller", gokitlog.DefaultCaller)
 
-	// This instance is only used to check collector creation and logging.
+	var allow level.Option
+	switch *logLevel {
+	case "debug":
+		allow = level.AllowDebug()
+	case "warn":
+		allow = level.AllowWarn()
+	case "error":
+		allow = level.AllowError()
+	default:
+		allow = level.AllowInfo()
+	}
+
+	baseLogger = level.NewFilter(logger, allow)
+	collector.SetLogger(baseLogger)
+	config.SetLogger(baseLogger)
+
+	level.Info(baseLogger).Log("msg", "Starting rlmlm_exporter", "version", version.Info())
+	level.Info(baseLogger).Log("msg", "Build context", "context", version.BuildContext())
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		level.Error(baseLogger).Log("msg", "failed to load configuration", "path", *configPath, "err", err)
+		os.Exit(1)
+	}
+	appConfig = cfg
+	collector.SetConfig(appConfig)
+
 	nc, err := collector.NewFlexlmCollector()
 	if err != nil {
-		log.Fatalf("Couldn't create collector: %s", err)
+		level.Error(baseLogger).Log("msg", "failed to create collector", "err", err)
+		os.Exit(1)
 	}
-	log.Infof("Enabled collectors:")
-	for n := range nc.Collectors {
-		log.Infof(" - %s", n)
-	}
-
-	// Load LicenseConfig from a YAML file.
-	collector.LicenseConfig, err = config.Load(*configPath)
-	if err != nil {
-		log.Fatalf("couldn't load %v configuration file", *configPath)
+	level.Info(baseLogger).Log("msg", "Enabled collectors")
+	for name := range nc.Collectors {
+		level.Info(baseLogger).Log("msg", "collector enabled", "collector", name)
 	}
 
 	http.HandleFunc(*metricsPath, handler)
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		num, err = w.Write([]byte(`<html>
-			<head><title>RLMlm Exporter</title></head>
-			<body>
-			<h1>RLMlm Exporter</h1>
-			<p><a href="` + *metricsPath + `">Metrics</a></p>
-			</body>
-			</html>`))
-		if err != nil {
-			log.Fatal(num, err)
+		if _, err := fmt.Fprintf(w, `<html>
+                        <head><title>RLMlm Exporter</title></head>
+                        <body>
+                        <h1>RLMlm Exporter</h1>
+                        <p><a href="%s">Metrics</a></p>
+                        </body>
+                        </html>`, *metricsPath); err != nil {
+			level.Error(baseLogger).Log("msg", "failed to write index page", "err", err)
 		}
 	})
 
-	log.Infoln("Listening on", *listenAddress)
-	err = http.ListenAndServe(*listenAddress, nil)
-	if err != nil {
-		log.Fatal(err)
+	level.Info(baseLogger).Log("msg", "Listening", "address", *listenAddress)
+	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
+		level.Error(baseLogger).Log("msg", "server exited", "err", err)
+		os.Exit(1)
 	}
 }
