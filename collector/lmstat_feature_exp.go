@@ -19,10 +19,15 @@ package collector
 import (
 	"fmt"
 
+	"github.com/go-kit/log"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/iambengiey/rlmlm_exporter/config"
 )
 
 type lmstatFeatureExpCollector struct {
+	config           *config.Config
+	logger           log.Logger
 	lmstatFeatureExp *prometheus.Desc
 }
 
@@ -33,8 +38,14 @@ func init() {
 
 // NewLmstatFeatureExpCollector returns a new Collector exposing rlmstat license
 // feature expiration date.
-func NewLmstatFeatureExpCollector() (Collector, error) {
+func NewLmstatFeatureExpCollector(cfg *config.Config, logger log.Logger) (Collector, error) {
+	if logger == nil {
+		logger = log.NewNopLogger()
+	}
+
 	return &lmstatFeatureExpCollector{
+		config: cfg,
+		logger: logger,
 		lmstatFeatureExp: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "feature",
 				"expiration_seconds"),

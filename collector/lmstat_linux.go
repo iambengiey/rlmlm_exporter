@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package collector
 
 import (
@@ -50,9 +53,9 @@ func (c *LmstatCollector) Update(ch chan<- prometheus.Metric) error {
 	return nil
 }
 
-// lmstatUpdate executes the lmstat command and updates metrics for a single license.
+// lmstatUpdate executes the rlmstat command and updates metrics for a single license.
 func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license config.License) {
-	level.Debug(c.logger).Log("msg", "Running lmstat for license", "name", license.Name)
+	level.Debug(c.logger).Log("msg", "Running rlmstat for license", "name", license.Name)
 
 	var (
 		server string
@@ -76,12 +79,12 @@ func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license conf
 		return
 	}
 
-	cmd := exec.Command("lmstat", args...)
+	cmd := exec.Command("rlmstat", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		// Log error using go-kit/log format (Fixes old log.Errorf)
 		level.Error(c.logger).Log(
-			"msg", "Failed to create stdout pipe for lmstat",
+			"msg", "Failed to create stdout pipe for rlmstat",
 			"license", license.Name,
 			"err", err,
 		)
@@ -92,9 +95,9 @@ func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license conf
 	if err := cmd.Start(); err != nil {
 		// Log error using go-kit/log format (Fixes old log.Errorf)
 		level.Error(c.logger).Log(
-			"msg", "Failed to start lmstat command",
+			"msg", "Failed to start rlmstat command",
 			"license", license.Name,
-			"cmd", "lmstat "+strings.Join(args, " "),
+			"cmd", "rlmstat "+strings.Join(args, " "),
 			"err", err,
 		)
 		ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 0, license.Name, server)
@@ -104,18 +107,18 @@ func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license conf
 	// Read and process the output
 	lmstatOutput, err := io.ReadAll(stdout)
 	if err != nil {
-		level.Error(c.logger).Log("msg", "Failed to read lmstat output", "license", license.Name, "err", err)
+		level.Error(c.logger).Log("msg", "Failed to read rlmstat output", "license", license.Name, "err", err)
 		cmd.Wait() // Ensure the command is waited on even if reading failed
 		ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 0, license.Name, server)
 		return
 	}
 
 	if err := cmd.Wait(); err != nil {
-		// lmstat often exits with a non-zero code on success (e.g., if no licenses are in use),
+		// rlmstat often exits with a non-zero code on success (e.g., if no licenses are in use),
 		// but we still want to parse the output if we got any.
 		if len(lmstatOutput) == 0 {
 			level.Error(c.logger).Log(
-				"msg", "lmstat command failed with no output",
+				"msg", "rlmstat command failed with no output",
 				"license", license.Name,
 				"err", err,
 			)
@@ -138,7 +141,7 @@ func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license conf
 
 // Placeholder for the actual parsing logic
 func (c *LmstatCollector) parseLmstatOutput(ch chan<- prometheus.Metric, license config.License, server, output string) {
-	level.Debug(c.logger).Log("msg", "Placeholder for lmstat output parsing", "license", license.Name, "output_length", len(output))
+	level.Debug(c.logger).Log("msg", "Placeholder for rlmstat output parsing", "license", license.Name, "output_length", len(output))
 }
 
 // init registers the collector.
