@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build linux || windows
 // +build linux windows
 
 package collector
@@ -30,7 +31,7 @@ func init() {
 		NewLmstatFeatureExpCollector)
 }
 
-// NewLmstatFeatureExpCollector returns a new Collector exposing lmstat license
+// NewLmstatFeatureExpCollector returns a new Collector exposing rlmstat license
 // feature expiration date.
 func NewLmstatFeatureExpCollector() (Collector, error) {
 	return &lmstatFeatureExpCollector{

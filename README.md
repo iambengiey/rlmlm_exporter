@@ -11,9 +11,9 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://raw.githubusercontent.com/drakeg/rlmlm_exporter/master/LICENSE)
 [![StyleCI](https://github.styleci.io/repos/246720157/shield?branch=master)](https://github.styleci.io/repos/246720157)
 [Prometheus](https://prometheus.io/) exporter for RLMlm License Manager
-`lmstat` license information.
+`rlmstat` license information.
 
-This fork is specialised for the reduced version of RLMlm License Manager bundled with installations of Klocwork. This reduced bundle contains lmstat as a independent tool, instead of the lmutil lmstat tool used by the parent of this fork.
+This fork is specialised for the reduced version of RLMlm License Manager bundled with installations of Klocwork. This reduced bundle contains rlmstat as a independent tool, instead of the lmutil rlmstat tool used by the parent of this fork.
 
 NOTE: The RLMLM Exporter currently builds only on Linux. Windows builds are a WIP. You will need to modify the Makefile to build in Windows.
 
@@ -61,7 +61,7 @@ Notes:
 ## Running
 
 ```
-$ ./rlmlm_exporter --path.lmutil="/klocwork/3rdparty/bin/lmstat" <flags>
+$ ./rlmlm_exporter --path.lmutil="/klocwork/3rdparty/bin/rlmstat" <flags>
 ```
 
 ### Docker images
@@ -74,17 +74,17 @@ Docker images are available on,
 You can launch a *rlmlm_exporter* container with,
 
 ```
-$ docker run --name rlmlm_exporter -d -p 9319:9319 --volume $LMUTIL_LOCAL:/usr/bin/rlmlm/ --volume $CONFIG_PATH_LOCAL:/config $DOCKER_REPOSITORY --path.lmutil="/usr/bin/rlmlm/lmstat" --path.config="/config/licenses.yml"
+$ docker run --name rlmlm_exporter -d -p 9319:9319 --volume $LMUTIL_LOCAL:/usr/bin/rlmlm/ --volume $CONFIG_PATH_LOCAL:/config $DOCKER_REPOSITORY --path.lmutil="/usr/bin/rlmlm/rlmstat" --path.config="/config/licenses.yml"
 ```
 
 Metrics will now be reachable at http://localhost:9319/metrics.
 
 ## What's exported?
 
- * `lmstat -v` information.
- * `lmstat -c license_file -a` or `lmstat -c license_server -a`
+ * `rlmstat -v` information.
+ * `rlmstat -c license_file -a` or `rlmstat -c license_server -a`
    license information.
- * `lmstat -c license_file -i` or `lmstat -c license_server -i`
+ * `rlmstat -c license_file -i` or `rlmstat -c license_server -i`
    license features expiration date.
 
 ## Dashboards

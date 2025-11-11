@@ -70,13 +70,13 @@ func parseLmstatLicenseFeatureExpDate(outStr [][]string) map[int]*featureExp {
 	return featuresExp
 }
 
-// getLmstatFeatureExpDate returns lmstat active and inactive licenses expiration date
+// getLmstatFeatureExpDate returns rlmstat active and inactive licenses expiration date
 func (c *lmstatFeatureExpCollector) getLmstatFeatureExpDate(ch chan<- prometheus.Metric) error {
 	var outBytes []byte
 	var err error
 
 	for _, licenses := range LicenseConfig.Licenses {
-		// Call lmstat with -i (lmstat -i does not give information from the server,
+		// Call rlmstat with -i (rlmstat -i does not give information from the server,
 		// but only reads the license file)
 		if licenses.LicenseFile != "" {
 			outBytes, err = lmutilOutput("-c", licenses.LicenseFile, "-i")

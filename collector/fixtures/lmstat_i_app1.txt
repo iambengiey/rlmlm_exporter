@@ -1,6 +1,6 @@
-NOTE: lmstat -i does not give information from the server,
+NOTE: rlmstat -i does not give information from the server,
       but only reads the license file.  For this reason,
-      lmstat -a is recommended instead.
+      rlmstat -a is recommended instead.
 
 Feature                         Version     #licenses    Expires      Vendor
 _______                         _________   _________    __________   ______

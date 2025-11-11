@@ -11,6 +11,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build linux || windows
 // +build linux windows
 
 package collector
@@ -32,15 +33,15 @@ type lmstatCollector struct {
 }
 
 func init() {
-	registerCollector("lmstat", defaultEnabled, NewLmstatCollector)
+	registerCollector("rlmstat", defaultEnabled, NewLmstatCollector)
 }
 
-// NewLmstatCollector returns a new Collector exposing lmstat license stats.
+// NewLmstatCollector returns a new Collector exposing rlmstat license stats.
 func NewLmstatCollector() (Collector, error) {
 	return &lmstatCollector{
 		lmstatInfo: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "lmstat", "info"),
-			"A metric with a constant '1' value labeled by arch, build and version of the lmstat tool.",
+			prometheus.BuildFQName(namespace, "rlmstat", "info"),
+			"A metric with a constant '1' value labeled by arch, build and version of the rlmstat tool.",
 			[]string{"arch", "build", "version"}, nil,
 		),
 		lmstatServerStatus: prometheus.NewDesc(
@@ -82,7 +83,7 @@ func NewLmstatCollector() (Collector, error) {
 func (c *lmstatCollector) Update(ch chan<- prometheus.Metric) error {
 	err := c.getLmstatInfo(ch)
 	if err != nil {
-		return fmt.Errorf("couldn't get lmstat version information: %s", err)
+		return fmt.Errorf("couldn't get rlmstat version information: %s", err)
 	}
 	err = c.getLmstatLicensesInfo(ch)
 	if err != nil {

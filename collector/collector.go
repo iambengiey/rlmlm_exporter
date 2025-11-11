@@ -21,7 +21,11 @@ import (
 	"time"
 
 	"github.com/alecthomas/kingpin/v2"
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/iambengiey/rlmlm_exporter/config" // Import config package
 )
 
 // Namespace defines the common namespace to be used by all metrics.
@@ -48,11 +52,17 @@ const (
 )
 
 var (
-	factories      = make(map[string]func() (Collector, error))
+	factories      = make(map[string]func(*config.Config, log.Logger) (Collector, error))
 	collectorState = make(map[string]*bool)
 )
 
-func registerCollector(collector string, isDefaultEnabled bool, factory func() (Collector, error)) {
+// Collector is the interface a collector has to implement.
+type Collector interface {
+	// Get new metrics and expose them via prometheus registry.
+	Update(ch chan<- prometheus.Metric) error
+}
+
+func registerCollector(collector string, isDefaultEnabled bool, factory func(*config.Config, log.Logger) (Collector, error)) {
 	var helpDefaultState string
 	if isDefaultEnabled {
 		helpDefaultState = "enabled"
@@ -70,13 +80,19 @@ func registerCollector(collector string, isDefaultEnabled bool, factory func() (
 	factories[collector] = factory
 }
 
-// FlexlmCollector implements the prometheus.Collector interface.
-type FlexlmCollector struct {
+// RlmlmCollector implements the prometheus.Collector interface, storing config and logger.
+type RlmlmCollector struct {
+	Config     *config.Config
+	Logger     log.Logger
 	Collectors map[string]Collector
 }
 
-// NewFlexlmCollector creates a new FlexlmCollector
-func NewFlexlmCollector(filters ...string) (*FlexlmCollector, error) {
+// NewRlmlmCollector creates a new RlmlmCollector, replacing the old NewFlexlmCollector.
+func NewRlmlmCollector(cfg *config.Config, logger log.Logger, filters ...string) (*RlmlmCollector, error) {
+	if logger == nil {
+		logger = log.NewNopLogger()
+	}
+
 	f := make(map[string]bool)
 	for _, filter := range filters {
 		enabled, exist := collectorState[filter]
@@ -88,10 +104,12 @@ func NewFlexlmCollector(filters ...string) (*FlexlmCollector, error) {
 		}
 		f[filter] = true
 	}
+
 	collectors := make(map[string]Collector)
 	for key, enabled := range collectorState {
 		if *enabled {
-			collector, err := factories[key]()
+			// Pass config and logger to the factory function
+			collector, err := factories[key](cfg, logger)
 			if err != nil {
 				return nil, err
 			}
@@ -100,49 +118,61 @@ func NewFlexlmCollector(filters ...string) (*FlexlmCollector, error) {
 			}
 		}
 	}
-	return &FlexlmCollector{Collectors: collectors}, nil
+
+	return &RlmlmCollector{
+		Config:     cfg,
+		Logger:     logger,
+		Collectors: collectors,
+	}, nil
 }
 
 // Describe implements the prometheus.Collector interface.
-func (n FlexlmCollector) Describe(ch chan<- *prometheus.Desc) {
+func (c RlmlmCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- scrapeDurationDesc
 	ch <- scrapeSuccessDesc
 }
 
 // Collect implements the prometheus.Collector interface.
-func (n FlexlmCollector) Collect(ch chan<- prometheus.Metric) {
+func (c RlmlmCollector) Collect(ch chan<- prometheus.Metric) {
 	wg := sync.WaitGroup{}
-	wg.Add(len(n.Collectors))
-	for name, c := range n.Collectors {
-		go func(name string, c Collector) {
-			execute(name, c, ch)
+	wg.Add(len(c.Collectors))
+	for name, collector := range c.Collectors {
+		go func(name string, collector Collector) {
+			c.execute(name, collector, ch)
 			wg.Done()
-		}(name, c)
+		}(name, collector)
 	}
 	wg.Wait()
 }
 
-func execute(name string, c Collector, ch chan<- prometheus.Metric) {
+// execute runs the collector and handles logging the result.
+func (c RlmlmCollector) execute(name string, collector Collector, ch chan<- prometheus.Metric) {
 	begin := time.Now()
-	err := c.Update(ch)
+	err := collector.Update(ch)
 	duration := time.Since(begin)
 	var success float64
 
 	if err != nil {
-		log.Errorf("ERROR: %s collector failed after %fs: %s", name, duration.Seconds(), err)
+		// --- LOGGING MIGRATION: log.Errorf -> level.Error(c.Logger).Log() ---
+		level.Error(c.Logger).Log(
+			"msg", "collector failed",
+			"collector", name,
+			"duration_seconds", duration.Seconds(),
+			"err", err,
+		)
 		success = 0
 	} else {
-		log.Debugf("OK: %s collector succeeded after %fs.", name, duration.Seconds())
+		// --- LOGGING MIGRATION: log.Debugf -> level.Debug(c.Logger).Log() ---
+		level.Debug(c.Logger).Log(
+			"msg", "collector succeeded",
+			"collector", name,
+			"duration_seconds", duration.Seconds(),
+		)
 		success = 1
 	}
+
 	ch <- prometheus.MustNewConstMetric(scrapeDurationDesc, prometheus.GaugeValue, duration.Seconds(), name)
 	ch <- prometheus.MustNewConstMetric(scrapeSuccessDesc, prometheus.GaugeValue, success, name)
-}
-
-// Collector is the interface a collector has to implement.
-type Collector interface {
-	// Get new metrics and expose them via prometheus registry.
-	Update(ch chan<- prometheus.Metric) error
 }
 
 type typedDesc struct {

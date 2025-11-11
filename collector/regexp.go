@@ -5,7 +5,7 @@ import "regexp"
 var (
 	// Regexp to parse lmutil output.
 	lmutilVersionRegex = regexp.MustCompile(
-		`^lmstat (?P<version>v[\d\.]+) build (?P<build>\d+) (?P<arch>[\w\_]+)`)
+		`^rlmstat (?P<version>v[\d\.]+) build (?P<build>\d+) (?P<arch>[\w\_]+)`)
 	lmutilLicenseServersRegex = regexp.MustCompile(
 		`^License server status: (?P<servers>[\w\,\.\@\-]+)`)
 	lmutilLicenseServerStatusRegex = regexp.MustCompile(
@@ -27,7 +27,7 @@ var (
 	lmutilLicenseFeatureGroupReservRegex = regexp.MustCompile(
 		`^(\s+|)(?P<reservation>\d+)\s+\w+\s+for\s+(HOST_GROUP|GROUP)\s+` +
 			`(?P<group>\w+).*$`)
-	// lmutil lmstat -c port@hostname -i
+	// lmutil rlmstat -c port@hostname -i
 	lmutilLicenseFeatureExpRegex = regexp.MustCompile(
 		`^(?P<feature>[[:graph:]]+)\s+(?P<version>[\d\.]+)\s+` +
 			`(?P<licenses>\d+)\s+(?P<expires>[\w\-]+)\s+(?P<vendor>\w+)$`)
