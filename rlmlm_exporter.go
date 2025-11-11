@@ -29,6 +29,8 @@ import (
 	"github.com/iambengiey/rlmlm_exporter/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/promlog"
+	promlogflag "github.com/prometheus/common/promlog/flag"
 	"github.com/prometheus/common/version"
 )
 
@@ -76,37 +78,15 @@ func main() {
 		listenAddress = kingpin.Flag("web.listen-address", "Address on which to expose metrics and web interface.").Default(":9319").String()
 		metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		configPath    = kingpin.Flag("path.config", "Configuration YAML file path.").Default("licenses.yml").String()
-		logFormat     = kingpin.Flag("log.format", "Log format to use (logfmt or json).").Default("logfmt").Enum("logfmt", "json")
-		logLevel      = kingpin.Flag("log.level", "Log level to use (debug, info, warn, error).").Default("info").Enum("debug", "info", "warn", "error")
 	)
 
+	promlogConfig := promlog.Config{}
+	promlogflag.AddFlags(kingpin.CommandLine, &promlogConfig)
 	kingpin.Version(version.Print("rlmlm_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	var logger gokitlog.Logger
-	switch *logFormat {
-	case "json":
-		logger = gokitlog.NewJSONLogger(os.Stderr)
-	default:
-		logger = gokitlog.NewLogfmtLogger(os.Stderr)
-	}
-	logger = gokitlog.NewSyncLogger(logger)
-	logger = gokitlog.With(logger, "ts", gokitlog.DefaultTimestampUTC(), "caller", gokitlog.DefaultCaller)
-
-	var allow level.Option
-	switch *logLevel {
-	case "debug":
-		allow = level.AllowDebug()
-	case "warn":
-		allow = level.AllowWarn()
-	case "error":
-		allow = level.AllowError()
-	default:
-		allow = level.AllowInfo()
-	}
-
-	baseLogger = level.NewFilter(logger, allow)
+	baseLogger = promlog.New(promlogConfig)
 	collector.SetLogger(baseLogger)
 	config.SetLogger(baseLogger)
 
