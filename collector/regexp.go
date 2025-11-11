@@ -3,7 +3,7 @@ package collector
 import "regexp"
 
 var (
-	// Regexp to parse lmutil output.
+	// Regexp to parse rlmstat output (compatible with the historical lmutil format).
 	lmutilVersionRegex = regexp.MustCompile(
 		`^rlmstat (?P<version>v[\d\.]+) build (?P<build>\d+) (?P<arch>[\w\_]+)`)
 	lmutilLicenseServersRegex = regexp.MustCompile(
@@ -27,7 +27,7 @@ var (
 	lmutilLicenseFeatureGroupReservRegex = regexp.MustCompile(
 		`^(\s+|)(?P<reservation>\d+)\s+\w+\s+for\s+(HOST_GROUP|GROUP)\s+` +
 			`(?P<group>\w+).*$`)
-	// lmutil rlmstat -c port@hostname -i
+	// rlmstat -c port@hostname -i
 	lmutilLicenseFeatureExpRegex = regexp.MustCompile(
 		`^(?P<feature>[[:graph:]]+)\s+(?P<version>[\d\.]+)\s+` +
 			`(?P<licenses>\d+)\s+(?P<expires>[\w\-]+)\s+(?P<vendor>\w+)$`)

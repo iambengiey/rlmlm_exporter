@@ -55,9 +55,9 @@ func contains(slice []string, item string) bool {
 	return ok
 }
 
-// execute lmutil utility.
-func lmutilOutput(args ...string) ([]byte, error) {
-	cmd := exec.Command(*lmutilPath, args...)
+// execute rlmstat utility.
+func rlmstatOutput(args ...string) ([]byte, error) {
+	cmd := exec.Command(*rlmstatPath, args...)
 	// Disable localization for parsing.
 	cmd.Env = append(os.Environ(), "LANG=C")
 	out, err := cmd.Output()
@@ -65,18 +65,18 @@ func lmutilOutput(args ...string) ([]byte, error) {
 		// convert error to strings
 		errorToString := errorDescriptionString[err.Error()]
 		if errorToString != "" {
-			log.Errorf("error while calling '%s %s': %v:'%s'", *lmutilPath,
+			log.Errorf("error while calling '%s %s': %v:'%s'", *rlmstatPath,
 				strings.Join(args, " "), err, errorToString)
 		} else {
 			log.Errorf("error while calling '%s %s': %v:'unknown error'",
-				*lmutilPath, strings.Join(args, " "), err)
+				*rlmstatPath, strings.Join(args, " "), err)
 		}
 	}
 	return out, err
 }
 
-func splitOutput(lmutilOutput []byte) ([][]string, error) {
-	r := csv.NewReader(bytes.NewReader(lmutilOutput))
+func splitOutput(rlmstatOutput []byte) ([][]string, error) {
+	r := csv.NewReader(bytes.NewReader(rlmstatOutput))
 	// It seems that some vendors used to encrypt the display, and contains
 	// pipes. That is why we have to use other special characters.
 	// r.Comma = '|'
@@ -85,7 +85,7 @@ func splitOutput(lmutilOutput []byte) ([][]string, error) {
 	r.Comment = '#'
 	result, err := r.ReadAll()
 	if err != nil {
-		log.Errorf("could not parse lmutil output: %v", err)
+		log.Errorf("could not parse rlmstat output: %v", err)
 		return result, err
 	}
 
@@ -237,7 +237,7 @@ func parseLmstatLicenseInfoFeature(outStr [][]string) (map[string]*feature,
 
 // getLmstatInfo returns rlmstat binary information
 func (c *lmstatCollector) getLmstatInfo(ch chan<- prometheus.Metric) error {
-	outBytes, err := lmutilOutput("-v")
+	outBytes, err := rlmstatOutput("-v")
 	if err != nil {
 		log.Errorln(err)
 		return err
@@ -261,12 +261,12 @@ func (c *lmstatCollector) getLmstatLicensesInfo(ch chan<- prometheus.Metric) err
 	for _, licenses := range LicenseConfig.Licenses {
 		// Call rlmstat with -a (display everything)
 		if licenses.LicenseFile != "" {
-			outBytes, err = lmutilOutput("-c", licenses.LicenseFile, "-a")
+			outBytes, err = rlmstatOutput("-c", licenses.LicenseFile, "-a")
 			if err != nil {
 				continue
 			}
 		} else if licenses.LicenseServer != "" {
-			outBytes, err = lmutilOutput("-c", licenses.LicenseServer, "-a")
+			outBytes, err = rlmstatOutput("-c", licenses.LicenseServer, "-a")
 			if err != nil {
 				continue
 			}
