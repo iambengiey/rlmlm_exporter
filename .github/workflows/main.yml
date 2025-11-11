@@ -1,87 +1,32 @@
-package main
+name: Build RLM Exporter
 
-import (
-	"fmt"
-	"net/http"
-	"os"
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
-	"github.com/alecthomas/kingpin/v2"
-	"github.com/go-kit/log"
-	"github.com/go-kit/log/level"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	// Ensure these local packages exist and are imported correctly
-	"github.com/iambengiey/rlmlm_exporter/collector"
-	"github.com/iambengiey/rlmlm_exporter/config" 
-)
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-var (
-	// CLI Flags setup using kingpin/v2
-	listenAddress = kingpin.Flag("web.listen-address", "Address to listen on for HTTP requests.").Default(":9240").String()
-	metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
-	configFile    = kingpin.Flag("config.file", "Exporter configuration file path.").Default("rlmlm.yml").String()
-)
+    strategy:
+      matrix:
+        goos: [linux, windows]
+        goarch: [amd64]
 
-func main() {
-	kingpin.Parse()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-	// --- LOGGING SETUP using go-kit/log ---
-	var logger log.Logger
-	logger = log.NewLogfmtLogger(log.NewSyncWriter(os.Stderr))
-	logger = log.With(logger, "ts", log.DefaultTimestampUTC, "caller", log.DefaultCaller)
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.22
 
-	// Apply log filtering based on CLI flag
-	switch *logLevel {
-	case "debug":
-		logger = level.NewFilter(logger, level.AllowDebug())
-	case "info":
-		logger = level.NewFilter(logger, level.AllowInfo())
-	case "warn":
-		logger = level.NewFilter(logger, level.AllowWarn())
-	case "error":
-		logger = level.NewFilter(logger, level.AllowError())
-	default:
-		// Default to info if unknown level is provided
-		logger = level.NewFilter(logger, level.AllowInfo())
-		level.Warn(logger).Log("msg", "Unknown log level provided, defaulting to info", "provided", *logLevel)
-	}
-	// --- END LOGGING SETUP ---
-
-	level.Info(logger).Log("msg", "Starting rlmlm_exporter")
-
-	// 1. Load configuration
-	cfg, err := config.LoadConfig(*configFile)
-	if err != nil {
-		level.Error(logger).Log("msg", "Failed to load configuration", "file", *configFile, "err", err)
-		os.Exit(1)
-	}
-	level.Info(logger).Log("msg", "Configuration loaded successfully", "path", *configFile)
-
-	// 2. Initialize and register collector
-	rlmlmCollector, err := collector.NewRlmlmCollector(cfg, logger)
-	if err != nil {
-		level.Error(logger).Log("msg", "Failed to create rlmlm collector", "err", err)
-		os.Exit(1)
-	}
-
-	prometheus.MustRegister(rlmlmCollector)
-	prometheus.MustRegister(prometheus.NewBuildInfoCollector())
-
-	// 3. Set up HTTP server
-	http.Handle(*metricsPath, promhttp.Handler())
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`<html>
-			<head><title>RLMLM Exporter</title></head>
-			<body>
-			<h1>RLMLM Exporter</h1>
-			<p><a href="` + *metricsPath + `">Metrics</a></p>
-			</body>
-			</html>`))
-	})
-
-	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
-	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
-		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
-		os.Exit(1)
-	}
-}
+      - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          mkdir -p dist/${{ matrix.goos }}/${{ matrix.goarch }}
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          go build -v -trimpath -ldflags="-s -w" \
+            -o dist/${{ matrix.goos }}/${{ matrix.goarch }}/rlmlm_exporter ./cmd/rlmlm_exporter
