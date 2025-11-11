@@ -23,9 +23,11 @@ jobs:
           - goos: linux
             goarch: amd64
             ext: ""
+            archive_name: rlmlm_exporter_linux_glibc3.21_amd64
           - goos: windows
             goarch: amd64
             ext: ".exe"
+            archive_name: rlmlm_exporter_windows_amd64
 
     steps:
       - name: Checkout
@@ -57,9 +59,9 @@ jobs:
         run: |
           cd dist/${{ matrix.goos }}/${{ matrix.goarch }}
           if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip -9 ../rlmlm_exporter_${{ matrix.goos }}_${{ matrix.goarch }}.zip rlmlm_exporter${{ matrix.ext }}
+            zip -9 ../${{ matrix.archive_name }}.zip rlmlm_exporter${{ matrix.ext }}
           else
-            tar -czf ../rlmlm_exporter_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz rlmlm_exporter${{ matrix.ext }}
+            tar -czf ../${{ matrix.archive_name }}.tar.gz rlmlm_exporter${{ matrix.ext }}
           fi
 
       - name: Checksums

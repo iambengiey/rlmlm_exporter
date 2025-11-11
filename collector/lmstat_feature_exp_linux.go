@@ -1,146 +1,96 @@
+//go:build linux
+// +build linux
+
 package collector
 
 import (
+	"errors"
 	"io"
 	"os/exec"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/iambengiey/rlmlm_exporter/config"
 )
 
-// Metric Descriptors (Assuming they were here)
-var (
-	// Placeholder for metric descriptors related to feature expiration
-	lmstatExpMetricDesc = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "feature", "expiration_timestamp_seconds"),
-		"RLMLM feature expiration date as a Unix timestamp.",
-		[]string{"license_name", "license_server", "feature", "version"},
-		nil,
-	)
-)
-
-// LmstatFeatureExpCollector implements the Collector interface.
-type LmstatFeatureExpCollector struct {
-	config *config.Config
-	logger log.Logger
-}
-
-// NewLmstatFeatureExpLinuxCollector creates a new LmstatFeatureExpCollector for Linux.
-// This is called by the generic NewLmstatFeatureExpCollector factory.
-func NewLmstatFeatureExpLinuxCollector(cfg *config.Config, logger log.Logger) (Collector, error) {
-	if logger == nil {
-		logger = log.NewNopLogger()
+// getLmstatFeatureExpDate fetches and exposes feature expiration data for each configured license.
+func (c *lmstatFeatureExpCollector) getLmstatFeatureExpDate(ch chan<- prometheus.Metric) error {
+	if c.config == nil {
+		return nil
 	}
 
-	return &LmstatFeatureExpCollector{
-		config: cfg,
-		logger: logger,
-	}, nil
-}
-
-// Update implements the Collector interface.
-func (c *LmstatFeatureExpCollector) Update(ch chan<- prometheus.Metric) error {
+	var firstErr error
 	for _, license := range c.config.Licenses {
-		c.lmstatFeatureExpUpdate(ch, license)
+		if err := c.lmstatFeatureExpUpdate(ch, license); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-
-	return nil
+	return firstErr
 }
 
-// lmstatFeatureExpUpdate executes the lmstat command to get expiration information.
-func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) {
-	level.Debug(c.logger).Log("msg", "Running lmstat for feature expiration", "name", license.Name)
+// lmstatFeatureExpUpdate executes rlmstat and parses the feature expiration information for a single license.
+func (c *lmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) error {
+	level.Debug(c.logger).Log("msg", "collecting feature expiration", "license", license.Name)
 
-	var (
-		server string
-		args   = []string{"-a", "-i"} // -i for license information
-	)
-
-	if license.LicenseFile != "" {
-		server = license.LicenseFile
-		args = append(args, "-c", server)
-	} else if license.LicenseServer != "" {
-		server = license.LicenseServer
-		args = append(args, "-c", server)
-	} else {
-		// FIX: Replaced undefined log.Errorf with go-kit/log
-		level.Error(c.logger).Log(
-			"msg", "Missing license_file or license_server for expiration collector",
-			"license", license.Name,
-		)
-		return
+	args, server, err := buildLicenseCommandArgs(license)
+	if err != nil {
+		level.Error(c.logger).Log("msg", "skipping license without server configuration", "license", license.Name, "err", err)
+		return err
 	}
 
-	cmd := exec.Command("lmstat", args...)
+	cmd := exec.Command("rlmstat", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		// FIX: Replaced undefined log.Errorf with go-kit/log
-		level.Error(c.logger).Log(
-			"msg", "Failed to create stdout pipe for lmstat exp",
-			"license", license.Name,
-			"err", err,
-		)
-		return
+		level.Error(c.logger).Log("msg", "failed to get rlmstat stdout", "license", license.Name, "err", err)
+		return err
 	}
 
 	if err := cmd.Start(); err != nil {
-		// FIX: Replaced undefined log.Errorf with go-kit/log
-		level.Error(c.logger).Log(
-			"msg", "Failed to start lmstat exp command",
-			"license", license.Name,
-			"cmd", "lmstat "+strings.Join(args, " "),
-			"err", err,
-		)
-		return
+		level.Error(c.logger).Log("msg", "failed to start rlmstat", "license", license.Name, "err", err)
+		return err
 	}
 
-	lmstatOutput, err := io.ReadAll(stdout)
-	if err != nil {
-		// FIX: Replaced undefined log.Errorln with go-kit/log
-		level.Error(c.logger).Log("msg", "Failed to read lmstat exp output", "license", license.Name, "err", err)
-		cmd.Wait()
-		return
+	output, readErr := io.ReadAll(stdout)
+	if readErr != nil {
+		level.Error(c.logger).Log("msg", "failed to read rlmstat output", "license", license.Name, "err", readErr)
+		_ = cmd.Wait()
+		return readErr
 	}
 
-	if err := cmd.Wait(); err != nil {
-		// This block is often where a log.Fatalf/Fatalln was used.
-		// Since collectors shouldn't crash the main process, we log an error and return.
-
-		// FIX: Replaced undefined log.Fatalf/Fatalln with level.Error and return
-		if strings.Contains(string(lmstatOutput), "License server status: Error") {
-			level.Error(c.logger).Log(
-				"msg", "License server error during expiration check (lmstat -i)",
-				"license", license.Name,
-				"err", err,
-			)
-			return
-		}
-
-		level.Error(c.logger).Log(
-			"msg", "lmstat exp command failed with error",
-			"license", license.Name,
-			"err", err,
-		)
-		return
+	if err := cmd.Wait(); err != nil && len(output) == 0 {
+		level.Error(c.logger).Log("msg", "rlmstat exited with error and no output", "license", license.Name, "err", err)
+		return err
 	}
 
-	// Logic to parse expiration date from output
-	c.parseLmstatExpirationOutput(ch, license, server, string(lmstatOutput))
+	c.parseLmstatExpirationOutput(ch, license, server, string(output))
+	return nil
 }
 
-// Regex to find expiration lines (Example structure, adjust as needed)
+func buildLicenseCommandArgs(license config.License) ([]string, string, error) {
+	args := []string{"-a", "-i"}
+	switch {
+	case license.LicenseFile != "":
+		args = append(args, "-c", license.LicenseFile)
+		return args, license.LicenseFile, nil
+	case license.LicenseServer != "":
+		args = append(args, "-c", license.LicenseServer)
+		return args, license.LicenseServer, nil
+	default:
+		return nil, "", errNoLicenseTarget
+	}
+}
+
+var errNoLicenseTarget = errors.New("missing license_file or license_server")
+
 var expRegexp = regexp.MustCompile(`Expires: (\w{3} \d{2}, \d{4})`)
 
-func (c *LmstatFeatureExpCollector) parseLmstatExpirationOutput(ch chan<- prometheus.Metric, license config.License, server, output string) {
+func (c *lmstatFeatureExpCollector) parseLmstatExpirationOutput(ch chan<- prometheus.Metric, license config.License, server, output string) {
 	lines := strings.Split(output, "\n")
 
-	// Placeholder for tracking current feature/version being parsed
 	currentFeature := ""
 	currentVersion := ""
 
@@ -150,37 +100,35 @@ func (c *LmstatFeatureExpCollector) parseLmstatExpirationOutput(ch chan<- promet
 			if len(parts) >= 2 {
 				currentFeature = parts[1]
 			}
-			// Version parsing logic might be needed here or another line
 			continue
 		}
 
 		match := expRegexp.FindStringSubmatch(line)
-		if len(match) > 1 {
-			expiryDateStr := match[1]
-
-			// Parse the date (e.g., "Dec 31, 2025")
-			t, err := time.Parse("Jan 02, 2006", expiryDateStr)
-			if err != nil {
-				level.Error(c.logger).Log(
-					"msg", "Failed to parse expiration date",
-					"date", expiryDateStr,
-					"err", err,
-				)
-				continue
-			}
-
-			// Report the metric (assuming we found a feature/version context)
-			if currentFeature != "" {
-				ch <- prometheus.MustNewConstMetric(
-					lmstatExpMetricDesc,
-					prometheus.GaugeValue,
-					float64(t.Unix()),
-					license.Name,
-					server,
-					currentFeature,
-					currentVersion,
-				)
-			}
+		if len(match) < 2 {
+			continue
 		}
+
+		expiryDateStr := match[1]
+		t, err := time.Parse("Jan 02, 2006", expiryDateStr)
+		if err != nil {
+			level.Error(c.logger).Log("msg", "failed to parse expiration date", "license", license.Name, "value", expiryDateStr, "err", err)
+			continue
+		}
+
+		if currentFeature == "" {
+			continue
+		}
+
+		ch <- prometheus.MustNewConstMetric(
+			c.lmstatFeatureExp,
+			prometheus.GaugeValue,
+			float64(t.Unix()),
+			license.Name,
+			currentFeature,
+			"0",
+			server,
+			"",
+			currentVersion,
+		)
 	}
 }
