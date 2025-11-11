@@ -1,5 +1,5 @@
 // Package config includes all individual types and functions to gather
-// the monitored licenses.
+// the monitored licences.
 // (C) Copyright 2017 Mario Trangoni.
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,28 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
 package config
 
 import (
-	"io/ioutil"
+	"errors"
+	"os"
 	"path/filepath"
 
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"gopkg.in/yaml.v2"
 )
 
-// YAML Type definitions
+// ---------- Package logger (safe default) ----------
+var cfgLogger log.Logger = log.NewNopLogger()
 
-// License individual configuration type.
+// SetLogger allows main to inject a real logger.
+func SetLogger(l log.Logger) { if l != nil { cfgLogger = l } }
+
+// ---------- YAML type definitions ----------
+
+// Licence individual configuration type.
 type License struct {
 	Name                string `yaml:"name"`
 	LicenseFile         string `yaml:"license_file,omitempty"`
@@ -34,27 +44,27 @@ type License struct {
 	MonitorReservations bool   `yaml:"monitor_reservations"`
 }
 
-// Configuration type for all licenses.
-type Configuration struct {
+// Configuration type for all licences.
+type Config struct {
 	Licenses []License `yaml:"licenses"`
 }
 
-// Load parses the YAML file.
-func Load(filename string) (Configuration, error) {
-
-	log.Infoln("Loading license config file:")
-	log.Infof(" - %s", filename)
-
-	bytes, err := ioutil.ReadFile(filepath.Clean(filename))
-	if err != nil {
-		return Configuration{}, err
+// Load parses the YAML file at path and returns a Config.
+func Load(path string) (*Config, error) {
+	if path == "" {
+		return nil, errors.New("config path is empty")
 	}
 
-	var c Configuration
-	err = yaml.Unmarshal(bytes, &c)
+	clean := filepath.Clean(path)
+	level.Info(cfgLogger).Log("msg", "loading config", "path", clean)
+
+	data, err := os.ReadFile(clean)
 	if err != nil {
-		log.Fatalf("Couldn't load config file: %s", err)
+		level.Error(cfgLogger).Log("msg", "failed to read config file", "path", clean, "err", err)
+		return nil, err
 	}
 
-	return c, nil
-}
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		level.Error
+::contentReference[oaicite:0]{index=0}
