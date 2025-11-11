@@ -19,11 +19,12 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	"github.com/drakeg/rlmlm_exporter/collector"
-	"github.com/drakeg/rlmlm_exporter/config"
+	"github.com/iambengiey/rlmlm_exporter/collector"
+	"github.com/iambengiey/rlmlm_exporter/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/log"
+	"github.com/go-kit/log/level"
+	"github.com/go-kit/log"
 	"github.com/prometheus/common/version"
 	"github.com/alecthomas/kingpin/v2"
 )
