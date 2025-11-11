@@ -11,12 +11,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-GO                      ?= GO15VENDOREXPERIMENT=1 go
+GO                      ?= go
 GOPATH                  := $(firstword $(subst :, ,$(shell $(GO) env GOPATH)))
 PROMU                   ?= $(GOPATH)/bin/promu
 GODEP                   ?= $(GOPATH)/bin/dep
 GOLINTER                ?= $(GOPATH)/bin/golangci-lint
-GO_VERSION              ?= 1.12
+GO_VERSION              ?= 1.25
 pkgs                    = $(shell $(GO) list ./... | grep -v /vendor/)
 TARGET                  ?= rlmlm_exporter
 DOCKER_IMAGE_NAME       ?= drakeg/rlmlm_exporter
