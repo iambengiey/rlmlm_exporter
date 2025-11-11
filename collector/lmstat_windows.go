@@ -24,9 +24,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/go-kit/log"
 	"github.com/iambengiey/rlmlm_exporter/config"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/log"
 )
 
 var (

@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-kit/log"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/log"
 )
 
 func parseLmstatLicenseFeatureExpDate(outStr [][]string) map[int]*featureExp {
