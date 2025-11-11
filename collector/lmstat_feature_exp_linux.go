@@ -1,81 +1,57 @@
+//go:build linux
+// +build linux
+
 package collector
 
 import (
-	"io"
+	"bytes"
+	"encoding/csv"
+	"errors"
+	"fmt"
+	"math"
+	"os"
 	"os/exec"
-	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/iambengiey/rlmlm_exporter/config"
 )
 
-// Metric Descriptors (Assuming they were here)
-var (
-	// Placeholder for metric descriptors related to feature expiration
-	lmstatExpMetricDesc = prometheus.NewDesc(
-		prometheus.BuildFQName(namespace, "feature", "expiration_timestamp_seconds"),
-		"RLMLM feature expiration date as a Unix timestamp.",
-		[]string{"license_name", "license_server", "feature", "version"},
-		nil,
-	)
-)
-
-// LmstatFeatureExpCollector implements the Collector interface.
-type LmstatFeatureExpCollector struct {
-	config *config.Config
-	logger log.Logger
-}
-
-// NewLmstatFeatureExpLinuxCollector creates a new LmstatFeatureExpCollector for Linux.
-// This is called by the generic NewLmstatFeatureExpCollector factory.
-func NewLmstatFeatureExpLinuxCollector(cfg *config.Config, logger log.Logger) (Collector, error) {
-	if logger == nil {
-		logger = log.NewNopLogger()
+// getLmstatFeatureExpDate fetches and exposes feature expiration data for each configured license.
+func (c *lmstatFeatureExpCollector) getLmstatFeatureExpDate(ch chan<- prometheus.Metric) error {
+	if c.config == nil {
+		return nil
 	}
 
-	return &LmstatFeatureExpCollector{
-		config: cfg,
-		logger: logger,
-	}, nil
-}
-
-// Update implements the Collector interface.
-func (c *LmstatFeatureExpCollector) Update(ch chan<- prometheus.Metric) error {
+	var firstErr error
 	for _, license := range c.config.Licenses {
-		c.lmstatFeatureExpUpdate(ch, license)
+		if err := c.collectFeatureExpForLicense(ch, license); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-
-	return nil
+	return firstErr
 }
 
 // lmstatFeatureExpUpdate executes the rlmstat command to get expiration information.
 func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) {
 	level.Debug(c.logger).Log("msg", "Running rlmstat for feature expiration", "name", license.Name)
 
-	var (
-		server string
-		args   = []string{"-a", "-i"} // -i for license information
-	)
-
-	if license.LicenseFile != "" {
-		server = license.LicenseFile
-		args = append(args, "-c", server)
-	} else if license.LicenseServer != "" {
-		server = license.LicenseServer
-		args = append(args, "-c", server)
-	} else {
-		// FIX: Replaced undefined log.Errorf with go-kit/log
-		level.Error(c.logger).Log(
-			"msg", "Missing license_file or license_server for expiration collector",
-			"license", license.Name,
-		)
-		return
+	if license.FeaturesToExclude != "" && license.FeaturesToInclude != "" {
+		err := fmt.Errorf("features_to_include and features_to_exclude are both set for %s", license.Name)
+		level.Error(c.logger).Log("msg", "invalid feature filter configuration", "license", license.Name, "err", err)
+		return err
 	}
+
+	args := []string{"-i"}
+	target := license.LicenseServer
+	if license.LicenseFile != "" {
+		target = license.LicenseFile
+	}
+	args = append(args, "-c", target)
 
 	cmd := exec.Command("rlmstat", args...)
 	stdout, err := cmd.StdoutPipe()
@@ -127,60 +103,136 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 			"license", license.Name,
 			"err", err,
 		)
-		return
 	}
 
-	// Logic to parse expiration date from output
-	c.parseLmstatExpirationOutput(ch, license, server, string(rlmstatOutput))
+	return nil
 }
 
-// Regex to find expiration lines (Example structure, adjust as needed)
-var expRegexp = regexp.MustCompile(`Expires: (\w{3} \d{2}, \d{4})`)
+func runRlmstatCommand(args ...string) ([]byte, error) {
+	cmd := exec.Command("rlmstat", args...)
+	cmd.Env = append(os.Environ(), "LANG=C")
 
-func (c *LmstatFeatureExpCollector) parseLmstatExpirationOutput(ch chan<- prometheus.Metric, license config.License, server, output string) {
-	lines := strings.Split(output, "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		// Preserve stdout/stderr content for debugging if available.
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			out = append(out, exitErr.Stderr...)
+		}
+		return out, err
+	}
+	return out, nil
+}
 
-	// Placeholder for tracking current feature/version being parsed
-	currentFeature := ""
-	currentVersion := ""
+func splitFeatureExpOutput(raw []byte) ([][]string, error) {
+	r := csv.NewReader(bytes.NewReader(raw))
+	r.Comma = 'Ž'
+	r.LazyQuotes = true
+	r.Comment = '#'
+	records, err := r.ReadAll()
+	if err != nil {
+		return nil, err
+	}
 
-	for _, line := range lines {
-		if strings.HasPrefix(line, "Feature:") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				currentFeature = parts[1]
-			}
-			// Version parsing logic might be needed here or another line
+	filtered := make([][]string, 0, len(records))
+	seen := make(map[string]int)
+	for _, row := range records {
+		if len(row) == 0 {
+			continue
+		}
+		key := row[0]
+		if count, ok := seen[key]; ok {
+			seen[key] = count + 1
+			row[0] = strings.TrimSpace(row[0]) + strconv.Itoa(seen[key])
+		} else {
+			seen[key] = 1
+		}
+		filtered = append(filtered, row)
+	}
+	return filtered, nil
+}
+
+func parseFeatureExpRecords(records [][]string) []*featureExp {
+	features := make([]*featureExp, 0, len(records))
+	for _, row := range records {
+		if len(row) == 0 {
+			continue
+		}
+		line := strings.Join(row, "")
+		matches := lmutilLicenseFeatureExpRegex.FindStringSubmatch(line)
+		if matches == nil {
 			continue
 		}
 
-		match := expRegexp.FindStringSubmatch(line)
-		if len(match) > 1 {
-			expiryDateStr := match[1]
+		expires := parseExpiry(matches[4])
+		features = append(features, &featureExp{
+			name:     matches[1],
+			version:  matches[2],
+			licenses: matches[3],
+			expires:  expires,
+			vendor:   matches[5],
+		})
+	}
+	return features
+}
 
-			// Parse the date (e.g., "Dec 31, 2025")
-			t, err := time.Parse("Jan 02, 2006", expiryDateStr)
-			if err != nil {
-				level.Error(c.logger).Log(
-					"msg", "Failed to parse expiration date",
-					"date", expiryDateStr,
-					"err", err,
-				)
-				continue
-			}
+func parseExpiry(raw string) float64 {
+	if raw == "" {
+		return math.Inf(1)
+	}
 
-			// Report the metric (assuming we found a feature/version context)
-			if currentFeature != "" {
-				ch <- prometheus.MustNewConstMetric(
-					lmstatExpMetricDesc,
-					prometheus.GaugeValue,
-					float64(t.Unix()),
-					license.Name,
-					server,
-					currentFeature,
-					currentVersion,
-				)
+	if strings.EqualFold(raw, "permanent") || strings.EqualFold(raw, "none") {
+		return math.Inf(1)
+	}
+
+	parts := strings.Split(raw, "-")
+	if len(parts) == 3 {
+		day := parts[0]
+		month := strings.Title(strings.ToLower(parts[1]))
+		year := parts[2]
+		if len(day) == 1 {
+			day = "0" + day
+		}
+		if len(year) == 1 {
+			year = "000" + year
+		}
+		if t, err := time.Parse("02-Jan-2006", fmt.Sprintf("%s-%s-%s", day, month, year)); err == nil {
+			if t.Unix() <= 0 {
+				return math.Inf(1)
 			}
+			return float64(t.Unix())
 		}
 	}
+
+	if t, err := time.Parse("Jan 02, 2006", raw); err == nil {
+		if t.Unix() <= 0 {
+			return math.Inf(1)
+		}
+		return float64(t.Unix())
+	}
+
+	return math.Inf(1)
+}
+
+func splitCSVList(value string) []string {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func contains(slice []string, item string) bool {
+	for _, v := range slice {
+		if v == item {
+			return true
+		}
+	}
+	return false
 }
