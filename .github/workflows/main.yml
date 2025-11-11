@@ -1,0 +1,90 @@
+name: Go Cross-Compilation Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+' # Triggers the release step on version tags (e.g., v1.0.0)
+
+env:
+  PROJECT_NAME: rlmlm_exporter # Use the name of your executable
+  GO_VERSION: 1.22
+
+jobs:
+  build:
+    # Use a single, fast runner (Linux) for cross-compilation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Required for creating releases and uploading artifacts
+
+    strategy:
+      matrix:
+        # Define the target OS and Architecture for Go cross-compilation
+        goos: [linux, windows]
+        goarch: [amd64]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go ${{ env.GO_VERSION }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }} Binary
+        # Set the GOOS (Operating System) and GOARCH (Architecture) environment variables
+        # for Go to cross-compile the binary for the desired target.
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p release
+          
+          # Determine output name and add .exe suffix for Windows
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            OUTPUT_NAME="${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
+          else
+            OUTPUT_NAME="${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          fi
+          
+          echo "Building binary: $OUTPUT_NAME"
+          # The -ldflags="-s -w" flag strips debugging symbols, reducing binary size
+          go build -o release/$OUTPUT_NAME -ldflags="-s -w" .
+
+      - name: Compress Binary (tar.gz for Linux, zip for Windows)
+        run: |
+          cd release
+          if [ "${{ matrix.goos }}" == "windows" ]; then
+            # Windows: Create a ZIP file
+            zip ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.zip ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.exe
+          else
+            # Linux: Create a tar.gz archive
+            tar -czf ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          fi
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release/${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}*
+          
+      # ----------------------------------------------------------------------
+      # Create Release (runs ONLY when a version tag is pushed)
+      # ----------------------------------------------------------------------
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          # Automatically attaches the compressed files created above
+          files: |
+            release/${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.*
+          draft: true # Creates a draft release for manual review before publishing
+          body: |
+            ## New Release Artifacts
+            
+            This release includes binaries for both Linux and Windows.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
