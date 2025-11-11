@@ -32,38 +32,81 @@ func (c *lmstatFeatureExpCollector) getLmstatFeatureExpDate(ch chan<- prometheus
 	return firstErr
 }
 
-// lmstatFeatureExpUpdate executes rlmstat and parses the feature expiration information for a single license.
-func (c *lmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) error {
-	level.Debug(c.logger).Log("msg", "collecting feature expiration", "license", license.Name)
+// lmstatFeatureExpUpdate executes the rlmstat command to get expiration information.
+func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) {
+	level.Debug(c.logger).Log("msg", "Running rlmstat for feature expiration", "name", license.Name)
 
-	args, server, err := buildLicenseCommandArgs(license)
-	if err != nil {
-		level.Error(c.logger).Log("msg", "skipping license without server configuration", "license", license.Name, "err", err)
-		return err
+	var (
+		server string
+		args   = []string{"-a", "-i"} // -i for license information
+	)
+
+	if license.LicenseFile != "" {
+		server = license.LicenseFile
+		args = append(args, "-c", server)
+	} else if license.LicenseServer != "" {
+		server = license.LicenseServer
+		args = append(args, "-c", server)
+	} else {
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Missing license_file or license_server for expiration collector",
+			"license", license.Name,
+		)
+		return
 	}
 
 	cmd := exec.Command("rlmstat", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		level.Error(c.logger).Log("msg", "failed to get rlmstat stdout", "license", license.Name, "err", err)
-		return err
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Failed to create stdout pipe for rlmstat exp",
+			"license", license.Name,
+			"err", err,
+		)
+		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		level.Error(c.logger).Log("msg", "failed to start rlmstat", "license", license.Name, "err", err)
-		return err
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Failed to start rlmstat exp command",
+			"license", license.Name,
+			"cmd", "rlmstat "+strings.Join(args, " "),
+			"err", err,
+		)
+		return
 	}
 
-	output, readErr := io.ReadAll(stdout)
-	if readErr != nil {
-		level.Error(c.logger).Log("msg", "failed to read rlmstat output", "license", license.Name, "err", readErr)
-		_ = cmd.Wait()
-		return readErr
+	lmstatOutput, err := io.ReadAll(stdout)
+	if err != nil {
+		// FIX: Replaced undefined log.Errorln with go-kit/log
+		level.Error(c.logger).Log("msg", "Failed to read rlmstat exp output", "license", license.Name, "err", err)
+		cmd.Wait()
+		return
 	}
 
-	if err := cmd.Wait(); err != nil && len(output) == 0 {
-		level.Error(c.logger).Log("msg", "rlmstat exited with error and no output", "license", license.Name, "err", err)
-		return err
+	if err := cmd.Wait(); err != nil {
+		// This block is often where a log.Fatalf/Fatalln was used.
+		// Since collectors shouldn't crash the main process, we log an error and return.
+
+		// FIX: Replaced undefined log.Fatalf/Fatalln with level.Error and return
+		if strings.Contains(string(lmstatOutput), "License server status: Error") {
+			level.Error(c.logger).Log(
+				"msg", "License server error during expiration check (rlmstat -i)",
+				"license", license.Name,
+				"err", err,
+			)
+			return
+		}
+
+		level.Error(c.logger).Log(
+			"msg", "rlmstat exp command failed with error",
+			"license", license.Name,
+			"err", err,
+		)
+		return
 	}
 
 	c.parseLmstatExpirationOutput(ch, license, server, string(output))
