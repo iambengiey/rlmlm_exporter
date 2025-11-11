@@ -36,12 +36,9 @@ func (c *lmstatFeatureExpCollector) getLmstatFeatureExpDate(ch chan<- prometheus
 	return firstErr
 }
 
-func (c *lmstatFeatureExpCollector) collectFeatureExpForLicense(ch chan<- prometheus.Metric, license config.License) error {
-	if license.LicenseFile == "" && license.LicenseServer == "" {
-		err := errors.New("missing license_file or license_server")
-		level.Error(c.logger).Log("msg", "skipping license without target", "license", license.Name, "err", err)
-		return err
-	}
+// lmstatFeatureExpUpdate executes the rlmstat command to get expiration information.
+func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) {
+	level.Debug(c.logger).Log("msg", "Running rlmstat for feature expiration", "name", license.Name)
 
 	if license.FeaturesToExclude != "" && license.FeaturesToInclude != "" {
 		err := fmt.Errorf("features_to_include and features_to_exclude are both set for %s", license.Name)
@@ -56,43 +53,55 @@ func (c *lmstatFeatureExpCollector) collectFeatureExpForLicense(ch chan<- promet
 	}
 	args = append(args, "-c", target)
 
-	output, err := runRlmstatCommand(args...)
+	cmd := exec.Command("rlmstat", args...)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		if len(output) == 0 {
-			level.Error(c.logger).Log("msg", "failed to execute rlmstat", "license", license.Name, "target", target, "err", err)
-			return err
-		}
-		level.Warn(c.logger).Log("msg", "rlmstat exited with error but produced output", "license", license.Name, "target", target, "err", err)
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Failed to create stdout pipe for rlmstat exp",
+			"license", license.Name,
+			"err", err,
+		)
+		return
 	}
 
-	records, err := splitFeatureExpOutput(output)
-	if err != nil {
-		level.Error(c.logger).Log("msg", "failed to split rlmstat output", "license", license.Name, "err", err)
-		return err
+	if err := cmd.Start(); err != nil {
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Failed to start rlmstat exp command",
+			"license", license.Name,
+			"cmd", "rlmstat "+strings.Join(args, " "),
+			"err", err,
+		)
+		return
 	}
 
-	features := parseFeatureExpRecords(records)
-	featuresToExclude := splitCSVList(license.FeaturesToExclude)
-	featuresToInclude := splitCSVList(license.FeaturesToInclude)
+	lmstatOutput, err := io.ReadAll(stdout)
+	if err != nil {
+		// FIX: Replaced undefined log.Errorln with go-kit/log
+		level.Error(c.logger).Log("msg", "Failed to read rlmstat exp output", "license", license.Name, "err", err)
+		cmd.Wait()
+		return
+	}
 
-	for idx, feature := range features {
-		if contains(featuresToExclude, feature.name) {
-			continue
-		}
-		if len(featuresToInclude) > 0 && !contains(featuresToInclude, feature.name) {
-			continue
+	if err := cmd.Wait(); err != nil {
+		// This block is often where a log.Fatalf/Fatalln was used.
+		// Since collectors shouldn't crash the main process, we log an error and return.
+
+		// FIX: Replaced undefined log.Fatalf/Fatalln with level.Error and return
+		if strings.Contains(string(lmstatOutput), "License server status: Error") {
+			level.Error(c.logger).Log(
+				"msg", "License server error during expiration check (rlmstat -i)",
+				"license", license.Name,
+				"err", err,
+			)
+			return
 		}
 
-		ch <- prometheus.MustNewConstMetric(
-			c.lmstatFeatureExp,
-			prometheus.GaugeValue,
-			feature.expires,
-			license.Name,
-			feature.name,
-			strconv.Itoa(idx+1),
-			feature.licenses,
-			feature.vendor,
-			feature.version,
+		level.Error(c.logger).Log(
+			"msg", "rlmstat exp command failed with error",
+			"license", license.Name,
+			"err", err,
 		)
 	}
 
@@ -130,13 +139,10 @@ func splitFeatureExpOutput(raw []byte) ([][]string, error) {
 		if len(row) == 0 {
 			continue
 		}
-		for i := range row {
-			row[i] = strings.TrimSpace(row[i])
-		}
 		key := row[0]
 		if count, ok := seen[key]; ok {
 			seen[key] = count + 1
-			row[0] = key + strconv.Itoa(seen[key])
+			row[0] = strings.TrimSpace(row[0]) + strconv.Itoa(seen[key])
 		} else {
 			seen[key] = 1
 		}
@@ -159,11 +165,11 @@ func parseFeatureExpRecords(records [][]string) []*featureExp {
 
 		expires := parseExpiry(matches[4])
 		features = append(features, &featureExp{
-			name:     strings.TrimSpace(matches[1]),
-			version:  strings.TrimSpace(matches[2]),
-			licenses: strings.TrimSpace(matches[3]),
+			name:     matches[1],
+			version:  matches[2],
+			licenses: matches[3],
 			expires:  expires,
-			vendor:   strings.TrimSpace(matches[5]),
+			vendor:   matches[5],
 		})
 	}
 	return features
