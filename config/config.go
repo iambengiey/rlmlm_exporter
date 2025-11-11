@@ -18,7 +18,6 @@ import (
 	"io/ioutil"
 	"path/filepath"
 
-	"github.com/prometheus/common/log"
 	"gopkg.in/yaml.v2"
 )
 

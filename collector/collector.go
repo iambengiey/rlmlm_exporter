@@ -21,8 +21,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/log"
-	"gopkg.in/alecthomas/kingpin.v2"
+	"ithub.com/alecthomas/kingpin/v2"
 )
 
 // Namespace defines the common namespace to be used by all metrics.

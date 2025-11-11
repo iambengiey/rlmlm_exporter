@@ -15,7 +15,7 @@
 package collector
 
 import (
-	"gopkg.in/alecthomas/kingpin.v2"
+	"ithub.com/alecthomas/kingpin/v2"
 )
 
 var (
