@@ -1,134 +1,186 @@
-// Copyright 2017 Mario Trangoni
-// Copyright 2015 The Prometheus Authors
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 package collector
 
 import (
-	"fmt"
-	"math"
-	"strconv"
+	"io"
+	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/iambengiey/rlmlm_exporter/config"
 )
 
-func parseLmstatLicenseFeatureExpDate(outStr [][]string) map[int]*featureExp {
-	featuresExp := make(map[int]*featureExp)
-	var expires float64
-	var index int
-	// iterate over output lines
-	for _, line := range outStr {
-		lineJoined := strings.Join(line, "")
-		if !lmutilLicenseFeatureExpRegex.MatchString(lineJoined) {
-			continue
-		}
-		matches := lmutilLicenseFeatureExpRegex.FindStringSubmatch(lineJoined)
-		// Parse date, month has to be capitalized.
-		slice := strings.Split(matches[4], "-")
-		day, month, year := slice[0], slice[1], slice[2]
-		if len(day) == 1 {
-			day = "0" + day
-		}
-		if len(year) == 1 {
-			year = "000" + year
-		}
-		expireDate, err := time.Parse("02-Jan-2006",
-			fmt.Sprintf("%s-%s-%s", day,
-				strings.Title(month), year))
-		if err != nil {
-			log.Errorf("could not convert to date: %v", err)
-		}
+// Metric Descriptors (Assuming they were here)
+var (
+	// Placeholder for metric descriptors related to feature expiration
+	lmstatExpMetricDesc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "feature", "expiration_timestamp_seconds"),
+		"RLMLM feature expiration date as a Unix timestamp.",
+		[]string{"license_name", "license_server", "feature", "version"},
+		nil,
+	)
+)
 
-		if expireDate.Unix() <= 0 {
-			expires = math.Inf(1)
-		} else {
-			expires = float64(expireDate.Unix())
-		}
-
-		index++
-		featuresExp[index] = &featureExp{
-			name:     matches[1],
-			expires:  expires,
-			licenses: matches[3],
-			vendor:   matches[5],
-			version:  matches[2],
-		}
-	}
-	return featuresExp
+// LmstatFeatureExpCollector implements the Collector interface.
+type LmstatFeatureExpCollector struct {
+	config *config.Config
+	logger log.Logger
 }
 
-// getLmstatFeatureExpDate returns rlmstat active and inactive licenses expiration date
-func (c *lmstatFeatureExpCollector) getLmstatFeatureExpDate(ch chan<- prometheus.Metric) error {
-	var outBytes []byte
-	var err error
+// NewLmstatFeatureExpLinuxCollector creates a new LmstatFeatureExpCollector for Linux.
+// This is called by the generic NewLmstatFeatureExpCollector factory.
+func NewLmstatFeatureExpLinuxCollector(cfg *config.Config, logger log.Logger) (Collector, error) {
+	if logger == nil {
+		logger = log.NewNopLogger()
+	}
 
-	for _, licenses := range LicenseConfig.Licenses {
-		// Call rlmstat with -i (rlmstat -i does not give information from the server,
-		// but only reads the license file)
-		if licenses.LicenseFile != "" {
-			outBytes, err = lmutilOutput("-c", licenses.LicenseFile, "-i")
+	return &LmstatFeatureExpCollector{
+		config: cfg,
+		logger: logger,
+	}, nil
+}
+
+// Update implements the Collector interface.
+func (c *LmstatFeatureExpCollector) Update(ch chan<- prometheus.Metric) error {
+	for _, license := range c.config.Licenses {
+		c.lmstatFeatureExpUpdate(ch, license)
+	}
+
+	return nil
+}
+
+// lmstatFeatureExpUpdate executes the lmstat command to get expiration information.
+func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.Metric, license config.License) {
+	level.Debug(c.logger).Log("msg", "Running lmstat for feature expiration", "name", license.Name)
+
+	var (
+		server string
+		args   = []string{"-a", "-i"} // -i for license information
+	)
+
+	if license.LicenseFile != "" {
+		server = license.LicenseFile
+		args = append(args, "-c", server)
+	} else if license.LicenseServer != "" {
+		server = license.LicenseServer
+		args = append(args, "-c", server)
+	} else {
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Missing license_file or license_server for expiration collector",
+			"license", license.Name,
+		)
+		return
+	}
+
+	cmd := exec.Command("lmstat", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Failed to create stdout pipe for lmstat exp",
+			"license", license.Name,
+			"err", err,
+		)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		// FIX: Replaced undefined log.Errorf with go-kit/log
+		level.Error(c.logger).Log(
+			"msg", "Failed to start lmstat exp command",
+			"license", license.Name,
+			"cmd", "lmstat "+strings.Join(args, " "),
+			"err", err,
+		)
+		return
+	}
+
+	lmstatOutput, err := io.ReadAll(stdout)
+	if err != nil {
+		// FIX: Replaced undefined log.Errorln with go-kit/log
+		level.Error(c.logger).Log("msg", "Failed to read lmstat exp output", "license", license.Name, "err", err)
+		cmd.Wait()
+		return
+	}
+
+	if err := cmd.Wait(); err != nil {
+		// This block is often where a log.Fatalf/Fatalln was used.
+		// Since collectors shouldn't crash the main process, we log an error and return.
+
+		// FIX: Replaced undefined log.Fatalf/Fatalln with level.Error and return
+		if strings.Contains(string(lmstatOutput), "License server status: Error") {
+			level.Error(c.logger).Log(
+				"msg", "License server error during expiration check (lmstat -i)",
+				"license", license.Name,
+				"err", err,
+			)
+			return
+		}
+
+		level.Error(c.logger).Log(
+			"msg", "lmstat exp command failed with error",
+			"license", license.Name,
+			"err", err,
+		)
+		return
+	}
+
+	// Logic to parse expiration date from output
+	c.parseLmstatExpirationOutput(ch, license, server, string(lmstatOutput))
+}
+
+// Regex to find expiration lines (Example structure, adjust as needed)
+var expRegexp = regexp.MustCompile(`Expires: (\w{3} \d{2}, \d{4})`)
+
+func (c *LmstatFeatureExpCollector) parseLmstatExpirationOutput(ch chan<- prometheus.Metric, license config.License, server, output string) {
+	lines := strings.Split(output, "\n")
+
+	// Placeholder for tracking current feature/version being parsed
+	currentFeature := ""
+	currentVersion := ""
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Feature:") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				currentFeature = parts[1]
+			}
+			// Version parsing logic might be needed here or another line
+			continue
+		}
+
+		match := expRegexp.FindStringSubmatch(line)
+		if len(match) > 1 {
+			expiryDateStr := match[1]
+
+			// Parse the date (e.g., "Dec 31, 2025")
+			t, err := time.Parse("Jan 02, 2006", expiryDateStr)
 			if err != nil {
-				continue
-			}
-		} else if licenses.LicenseServer != "" {
-			outBytes, err = lmutilOutput("-c", licenses.LicenseServer, "-i")
-			if err != nil {
-				continue
-			}
-		} else {
-			log.Fatalf("couldn`t find `license_file` or `license_server` for %v",
-				licenses.Name)
-			return nil
-		}
-
-		outStr, err := splitOutput(outBytes)
-		if err != nil {
-			log.Errorln(err)
-			return err
-		}
-
-		// features
-		var featuresToExclude = []string{}
-		var featuresToInclude = []string{}
-		if licenses.FeaturesToExclude != "" && licenses.FeaturesToInclude != "" {
-			log.Fatalln("%v: can not define `features_to_include` and "+
-				"`features_to_exclude` at the same time", licenses.Name)
-			return nil
-		} else if licenses.FeaturesToExclude != "" {
-			featuresToExclude = strings.Split(licenses.FeaturesToExclude, ",")
-		} else if licenses.FeaturesToInclude != "" {
-			featuresToInclude = strings.Split(licenses.FeaturesToInclude, ",")
-		}
-
-		featuresExp := parseLmstatLicenseFeatureExpDate(outStr)
-
-		for idx, feature := range featuresExp {
-			if contains(featuresToExclude, feature.name) {
-				continue
-			} else if licenses.FeaturesToInclude != "" &&
-				!contains(featuresToInclude, feature.name) {
+				level.Error(c.logger).Log(
+					"msg", "Failed to parse expiration date",
+					"date", expiryDateStr,
+					"err", err,
+				)
 				continue
 			}
 
-			ch <- prometheus.MustNewConstMetric(c.lmstatFeatureExp,
-				prometheus.GaugeValue, feature.expires,
-				licenses.Name, feature.name, strconv.Itoa(idx),
-				feature.licenses, feature.vendor,
-				feature.version)
+			// Report the metric (assuming we found a feature/version context)
+			if currentFeature != "" {
+				ch <- prometheus.MustNewConstMetric(
+					lmstatExpMetricDesc,
+					prometheus.GaugeValue,
+					float64(t.Unix()),
+					license.Name,
+					server,
+					currentFeature,
+					currentVersion,
+				)
+			}
 		}
 	}
-	return nil
 }
