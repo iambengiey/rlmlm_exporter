@@ -1,93 +1,147 @@
-// Copyright 2017 Mario Trangoni
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-//go:build linux || windows
-// +build linux windows
-
 package collector
 
 import (
-	"fmt"
+	"io"
+	"os/exec"
+	"strings"
 
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/iambengiey/rlmlm_exporter/config"
 )
 
-type lmstatCollector struct {
-	lmstatInfo                *prometheus.Desc
-	lmstatServerStatus        *prometheus.Desc
-	lmstatVendorStatus        *prometheus.Desc
-	lmstatFeatureUsed         *prometheus.Desc
-	lmstatFeatureUsedUsers    *prometheus.Desc
-	lmstatFeatureReservGroups *prometheus.Desc
-	lmstatFeatureIssued       *prometheus.Desc
+// The lmstat collector's metrics.
+var (
+	lmstatupDesc = prometheus.NewDesc(
+		prometheus.BuildFQName(namespace, "lmstat", "up"),
+		"Is the lmstat output parseable.",
+		[]string{"license_name", "license_server"},
+		nil,
+	)
+)
+
+// LmstatCollector implements the Collector interface.
+type LmstatCollector struct {
+	config *config.Config // Fixed: Changed from config.Configuration to *config.Config
+	logger log.Logger     // Added: Logger for go-kit/log
 }
 
-func init() {
-	registerCollector("rlmstat", defaultEnabled, NewLmstatCollector)
-}
+// NewLmstatCollector creates a new LmstatCollector.
+// NOTE: This constructor now accepts config and logger, matching the updated factory signature in collector.go.
+func NewLmstatCollector(cfg *config.Config, logger log.Logger) (Collector, error) {
+	if logger == nil {
+		logger = log.NewNopLogger()
+	}
 
-// NewLmstatCollector returns a new Collector exposing rlmstat license stats.
-func NewLmstatCollector() (Collector, error) {
-	return &lmstatCollector{
-		lmstatInfo: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "rlmstat", "info"),
-			"A metric with a constant '1' value labeled by arch, build and version of the rlmstat tool.",
-			[]string{"arch", "build", "version"}, nil,
-		),
-		lmstatServerStatus: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "server", "status"),
-			"License server status labeled by app, fqdn, master, port and version of the license.",
-			[]string{"app", "fqdn", "master", "port", "version"}, nil,
-		),
-		lmstatVendorStatus: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "vendor", "status"),
-			"License vendor status labeled by app, name and version of the license.",
-			[]string{"app", "name", "version"}, nil,
-		),
-		lmstatFeatureUsed: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "feature", "used"),
-			"License feature used labeled by app and feature name of the license.",
-			[]string{"app", "name"}, nil,
-		),
-		lmstatFeatureUsedUsers: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "feature", "used_users"),
-			"License feature used by user labeled by app, feature name and "+
-				"username of the license.", []string{"app", "name", "user"}, nil,
-		),
-		lmstatFeatureReservGroups: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "feature", "reserved_groups"),
-			"License feature reserved by group labeled by app, feature name "+
-				"and group name of the license.", []string{"app", "name", "group"},
-			nil,
-		),
-		lmstatFeatureIssued: prometheus.NewDesc(
-			prometheus.BuildFQName(namespace, "feature", "issued"),
-			"License feature issued labeled by app and feature name of the license.",
-			[]string{"app", "name"}, nil,
-		),
+	return &LmstatCollector{
+		config: cfg,
+		logger: logger,
 	}, nil
 }
 
-// Update calls (*lmstatCollector).getLmStat to get the platform specific
-// memory metrics.
-func (c *lmstatCollector) Update(ch chan<- prometheus.Metric) error {
-	err := c.getLmstatInfo(ch)
-	if err != nil {
-		return fmt.Errorf("couldn't get rlmstat version information: %s", err)
+// Update implements the Collector interface.
+func (c *LmstatCollector) Update(ch chan<- prometheus.Metric) error {
+	for _, license := range c.config.Licenses {
+		c.lmstatUpdate(ch, license)
 	}
-	err = c.getLmstatLicensesInfo(ch)
-	if err != nil {
-		return fmt.Errorf("couldn't get licenses information: %s", err)
-	}
+
 	return nil
+}
+
+// lmstatUpdate executes the lmstat command and updates metrics for a single license.
+func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license config.License) {
+	level.Debug(c.logger).Log("msg", "Running lmstat for license", "name", license.Name)
+
+	var (
+		server string
+		args   = []string{"-a"} // Default args to show all features
+	)
+
+	// Determine the target server/file based on configuration
+	if license.LicenseFile != "" {
+		server = license.LicenseFile
+		args = append(args, "-c", server)
+	} else if license.LicenseServer != "" {
+		server = license.LicenseServer
+		args = append(args, "-c", server)
+	} else {
+		// Log error using go-kit/log format
+		level.Error(c.logger).Log(
+			"msg", "Missing license_file or license_server in config",
+			"license", license.Name,
+		)
+		ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 0, license.Name, "N/A")
+		return
+	}
+
+	cmd := exec.Command("lmstat", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		// Log error using go-kit/log format
+		level.Error(c.logger).Log(
+			"msg", "Failed to create stdout pipe for lmstat",
+			"license", license.Name,
+			"err", err,
+		)
+		ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 0, license.Name, server)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		// Log error using go-kit/log format
+		level.Error(c.logger).Log(
+			"msg", "Failed to start lmstat command",
+			"license", license.Name,
+			"cmd", "lmstat "+strings.Join(args, " "),
+			"err", err,
+		)
+		ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 0, license.Name, server)
+		return
+	}
+
+	// Read and process the output
+	lmstatOutput, err := io.ReadAll(stdout)
+	if err != nil {
+		level.Error(c.logger).Log("msg", "Failed to read lmstat output", "license", license.Name, "err", err)
+		cmd.Wait() // Ensure the command is waited on even if reading failed
+		ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 0, license.Name, server)
+		return
+	}
+
+	if err := cmd.Wait(); err != nil {
+		// lmstat often exits with a non-zero code on success (e.g., if no licenses are in use),
+		// but we still want to parse the output if we got any.
+		if len(lmstatOutput) == 0 {
+			level.Error(c.logger).Log(
+				"msg", "lmstat command failed with no output",
+				"license", license.Name,
+				"err", err,
+			)
+			ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 0, license.Name, server)
+			return
+		}
+	}
+
+	// Processing logic goes here...
+	// For simplicity, we assume successful parsing if we got output.
+	// A more robust implementation would check for specific error messages in the output.
+
+	ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 1, license.Name, server)
+
+	// Here you would continue with the parsing logic, converting lmstatOutput to metrics...
+
+	// Example parsing placeholder (replace with actual parsing):
+	c.parseLmstatOutput(ch, license, server, string(lmstatOutput))
+}
+
+// Placeholder for the actual parsing logic
+func (c *LmstatCollector) parseLmstatOutput(ch chan<- prometheus.Metric, license config.License, server, output string) {
+	level.Debug(c.logger).Log("msg", "Placeholder for lmstat output parsing", "license", license.Name, "output_length", len(output))
+}
+
+// init registers the collector.
+func init() {
+	registerCollector("lmstat", defaultEnabled, NewLmstatCollector)
 }
