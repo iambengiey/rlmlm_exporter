@@ -1,109 +1,88 @@
-name: Go Cross-Compilation Build
+package main
 
-on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+' # Triggers the release step on version tags (e.g., v1.0.0)
+import (
+	"fmt"
+	"net/http"
+	"os"
 
-env:
-  PROJECT_NAME: rlmlm_exporter # Use the name of your executable
-  GO_VERSION: 1.24 # UPDATED: Increased Go version to 1.24 to satisfy 'prometheus/client_golang' which requires go >= 1.23.0
+	"github.com/alecthomas/kingpin/v2"
+	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	// Ensure these local packages exist and are imported correctly
+	"github.com/iambengiey/rlmlm_exporter/collector"
+	"github.com/iambengiey/rlmlm_exporter/config" 
+)
 
-jobs:
-  build:
-    # Use a single, fast runner (Linux) for cross-compilation
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # Required for creating releases and uploading artifacts
+var (
+	// CLI Flags setup using kingpin/v2
+	listenAddress = kingpin.Flag("web.listen-address", "Address to listen on for HTTP requests.").Default(":9240").String()
+	metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
+	configFile    = kingpin.Flag("config.file", "Exporter configuration file path.").Default("rlmlm.yml").String()
+	logLevel      = kingpin.Flag("log.level", "Only log messages with the given severity or above. Options: debug, info, warn, error").Default("info").String()
+)
 
-    strategy:
-      matrix:
-        # Define the target OS and Architecture for Go cross-compilation
-        goos: [linux, windows]
-        goarch: [amd64]
+func main() {
+	kingpin.Parse()
 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+	// --- LOGGING SETUP using go-kit/log ---
+	var logger log.Logger
+	logger = log.NewLogfmtLogger(log.NewSyncWriter(os.Stderr))
+	logger = log.With(logger, "ts", log.DefaultTimestampUTC, "caller", log.DefaultCaller)
 
-      - name: Setup Go ${{ env.GO_VERSION }}
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
+	// Apply log filtering based on CLI flag
+	switch *logLevel {
+	case "debug":
+		logger = level.NewFilter(logger, level.AllowDebug())
+	case "info":
+		logger = level.NewFilter(logger, level.AllowInfo())
+	case "warn":
+		logger = level.NewFilter(logger, level.AllowWarn())
+	case "error":
+		logger = level.NewFilter(logger, level.AllowError())
+	default:
+		// Default to info if unknown level is provided
+		logger = level.NewFilter(logger, level.AllowInfo())
+		level.Warn(logger).Log("msg", "Unknown log level provided, defaulting to info", "provided", *logLevel)
+	}
+	// --- END LOGGING SETUP ---
 
-      - name: Initialize Go Module and Fix Dependencies
-        # 1. Creates the essential go.mod file.
-        # 2. Adds the necessary 'replace' directives for both kingpin and prometheus/common.
-        run: |
-          go mod init ${{ github.repository }}
-          
-          # Fix 1: Resolve gopkg.in/alecthomas/kingpin.v2 conflict
-          echo "replace gopkg.in/alecthomas/kingpin.v2 => github.com/alecthomas/kingpin/v2 v2.4.0" >> go.mod
-          
-          # Fix 2: Force use of an older version of prometheus/common that still contains the 'log' package.
-          # We use 'replace' to override the conflicting transitive dependency requirements.
-          echo "replace github.com/prometheus/common => github.com/prometheus/common v0.29.0" >> go.mod
+	level.Info(logger).Log("msg", "Starting rlmlm_exporter")
 
-      - name: Go Module Tidy and Download Dependencies
-        # Runs tidy to clean up the go.mod file and finalize dependency list.
-        run: |
-          go mod tidy
-          go mod download
-          
-      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }} Binary
-        # Set the GOOS (Operating System) and GOARCH (Architecture) environment variables
-        # for Go to cross-compile the binary for the desired target.
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          mkdir -p release
-          
-          # Determine output name and add .exe suffix for Windows
-          if [ "${{ matrix.goos }}" == "windows" ]; then
-            OUTPUT_NAME="${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.exe"
-          else
-            OUTPUT_NAME="${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}"
-          fi
-          
-          echo "Building binary: $OUTPUT_NAME"
-          # The -ldflags="-s -w" flag strips debugging symbols, reducing binary size
-          go build -o release/$OUTPUT_NAME -ldflags="-s -w" .
+	// 1. Load configuration
+	cfg, err := config.LoadConfig(*configFile)
+	if err != nil {
+		level.Error(logger).Log("msg", "Failed to load configuration", "file", *configFile, "err", err)
+		os.Exit(1)
+	}
+	level.Info(logger).Log("msg", "Configuration loaded successfully", "path", *configFile)
 
-      - name: Compress Binary (tar.gz for Linux, zip for Windows)
-        run: |
-          cd release
-          if [ "${{ matrix.goos }}" == "windows" ]; then
-            # Windows: Create a ZIP file
-            zip ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.zip ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.exe
-          else
-            # Linux: Create a tar.gz archive
-            tar -czf ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
-          fi
+	// 2. Initialize and register collector
+	rlmlmCollector, err := collector.NewRlmlmCollector(cfg, logger)
+	if err != nil {
+		level.Error(logger).Log("msg", "Failed to create rlmlm collector", "err", err)
+		os.Exit(1)
+	}
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: release/${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}*
-          
-      # ----------------------------------------------------------------------
-      # Create Release (runs ONLY when a version tag is pushed)
-      # ----------------------------------------------------------------------
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          # Automatically attaches the compressed files created above
-          files: |
-            release/${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.*
-          draft: true # Creates a draft release for manual review before publishing
-          body: |
-            ## New Release Artifacts
-            
-            This release includes binaries for both Linux and Windows.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+	prometheus.MustRegister(rlmlmCollector)
+	prometheus.MustRegister(prometheus.NewBuildInfoCollector())
+
+	// 3. Set up HTTP server
+	http.Handle(*metricsPath, promhttp.Handler())
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`<html>
+			<head><title>RLMLM Exporter</title></head>
+			<body>
+			<h1>RLMLM Exporter</h1>
+			<p><a href="` + *metricsPath + `">Metrics</a></p>
+			</body>
+			</html>`))
+	})
+
+	level.Info(logger).Log("msg", "Listening on address", "address", *listenAddress)
+	if err := http.ListenAndServe(*listenAddress, nil); err != nil {
+		level.Error(logger).Log("msg", "Error starting HTTP server", "err", err)
+		os.Exit(1)
+	}
+}
