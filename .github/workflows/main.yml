@@ -34,18 +34,22 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Initialize Go Module
-        # This step creates the essential go.mod file needed for 'go mod tidy'.
-        run: go mod init ${{ github.repository }}
-
-      - name: Fix Kingpin Dependency Path
-        # The project imports gopkg.in/alecthomas/kingpin.v2, but the module is defined as 
-        # github.com/alecthomas/kingpin/v2. This 'replace' directive resolves the conflict.
+      - name: Initialize Go Module and Fix Dependencies
+        # 1. Creates the essential go.mod file.
+        # 2. Adds the necessary 'replace' directive for kingpin.
+        # 3. Pins an older version of prometheus/common to resolve the missing 'log' package.
         run: |
+          go mod init ${{ github.repository }}
+          
+          # Fix for gopkg.in/alecthomas/kingpin.v2 conflict
           echo "replace gopkg.in/alecthomas/kingpin.v2 => github.com/alecthomas/kingpin/v2 v2.4.0" >> go.mod
+          
+          # Fix for missing github.com/prometheus/common/log package
+          # Pin to a version that still contains the 'log' package
+          echo "require github.com/prometheus/common v0.29.0" >> go.mod
 
       - name: Go Module Tidy and Download Dependencies
-        # This step resolves and fetches dependencies based on the main.go file.
+        # Runs tidy to clean up the go.mod file and finalize dependency list.
         run: |
           go mod tidy
           go mod download
