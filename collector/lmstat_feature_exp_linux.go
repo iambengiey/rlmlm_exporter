@@ -76,7 +76,7 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 		return
 	}
 
-	lmstatOutput, err := io.ReadAll(stdout)
+	rlmstatOutput, err := io.ReadAll(stdout)
 	if err != nil {
 		// FIX: Replaced undefined log.Errorln with go-kit/log
 		level.Error(c.logger).Log("msg", "Failed to read rlmstat exp output", "license", license.Name, "err", err)
@@ -89,7 +89,7 @@ func (c *LmstatFeatureExpCollector) lmstatFeatureExpUpdate(ch chan<- prometheus.
 		// Since collectors shouldn't crash the main process, we log an error and return.
 
 		// FIX: Replaced undefined log.Fatalf/Fatalln with level.Error and return
-		if strings.Contains(string(lmstatOutput), "License server status: Error") {
+		if strings.Contains(string(rlmstatOutput), "License server status: Error") {
 			level.Error(c.logger).Log(
 				"msg", "License server error during expiration check (rlmstat -i)",
 				"license", license.Name,

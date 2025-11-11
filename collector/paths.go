@@ -19,6 +19,6 @@ import (
 )
 
 var (
-	// The path of the Flexlm binaries.
-	lmutilPath = kingpin.Flag("path.lmutil", "FLEXlm `lmutil` path.").Default("./flexnet/bin/lmutil").String()
+	// The path of the RLM binaries.
+	rlmstatPath = kingpin.Flag("path.rlmstat", "RLM `rlmstat` path.").Default("./flexnet/bin/rlmstat").String()
 )

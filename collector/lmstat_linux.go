@@ -105,7 +105,7 @@ func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license conf
 	}
 
 	// Read and process the output
-	lmstatOutput, err := io.ReadAll(stdout)
+	rlmstatOutput, err := io.ReadAll(stdout)
 	if err != nil {
 		level.Error(c.logger).Log("msg", "Failed to read rlmstat output", "license", license.Name, "err", err)
 		cmd.Wait() // Ensure the command is waited on even if reading failed
@@ -116,7 +116,7 @@ func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license conf
 	if err := cmd.Wait(); err != nil {
 		// rlmstat often exits with a non-zero code on success (e.g., if no licenses are in use),
 		// but we still want to parse the output if we got any.
-		if len(lmstatOutput) == 0 {
+		if len(rlmstatOutput) == 0 {
 			level.Error(c.logger).Log(
 				"msg", "rlmstat command failed with no output",
 				"license", license.Name,
@@ -133,10 +133,10 @@ func (c *LmstatCollector) lmstatUpdate(ch chan<- prometheus.Metric, license conf
 
 	ch <- prometheus.MustNewConstMetric(lmstatupDesc, prometheus.GaugeValue, 1, license.Name, server)
 
-	// Here you would continue with the parsing logic, converting lmstatOutput to metrics...
+	// Here you would continue with the parsing logic, converting rlmstatOutput to metrics...
 
 	// Example parsing placeholder (replace with actual parsing):
-	c.parseLmstatOutput(ch, license, server, string(lmstatOutput))
+	c.parseLmstatOutput(ch, license, server, string(rlmstatOutput))
 }
 
 // Placeholder for the actual parsing logic
