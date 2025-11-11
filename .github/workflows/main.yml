@@ -9,7 +9,7 @@ on:
 
 env:
   PROJECT_NAME: rlmlm_exporter # Use the name of your executable
-  GO_VERSION: 1.22
+  GO_VERSION: 1.24 # UPDATED: Increased Go version to 1.24 to satisfy 'prometheus/client_golang' which requires go >= 1.23.0
 
 jobs:
   build:
